@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Generated run outputs (contain real addresses + customer geometry)
+output/
+output_*/
+
+# Local DSM / mask scratch data (kept in ~/Downloads during dev)
+*.tif
+*.mask.npy
+*.mask.json
+
+# Local env files
+.env
+.env.*
