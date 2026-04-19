@@ -10,11 +10,11 @@ See: .planning/PROJECT.md (updated 2026-04-18)
 ## Current Position
 
 Phase: 5 of 6 (Labeling Dashboard) -- EXECUTING
-Plan: 3 of 5 in current phase
-Status: Executing (Wave 3 of 4)
-Last activity: 2026-04-19 -- Plans 05-02 + 05-03 complete (Wave 2 parallel)
+Plan: 4 of 5 in current phase
+Status: Executing (Wave 4 of 4)
+Last activity: 2026-04-19 -- Plan 05-04 complete (snap preview + save + error capture)
 
-Progress: [========================================...................] 69% (14/16 plans complete, 2 remaining)
+Progress: [=============================================..............] 75% (15/16 plans complete, 1 remaining)
 
 ## Performance Metrics
 
@@ -31,7 +31,7 @@ Progress: [========================================...................] 69% (14/
 | 2. Apex Solver + Integration | 4/4 | -- | -- |
 | 3. Bug Fixes | 2/2 | -- | -- |
 | 4. FastAPI Sidecar | 4/4 | 33min | 8.3min |
-| 5. Labeling Dashboard | 1/5 | 6min | 6min |
+| 5. Labeling Dashboard | 4/5 | 16min | 4min |
 
 **Recent Trend:**
 - Milestone 1 completed in 2 phases, 7 plans
@@ -40,7 +40,10 @@ Progress: [========================================...................] 69% (14/
 - Phase 4 plan 03 completed in 5 min
 - Phase 4 plan 04 completed in 22 min
 - Phase 5 plan 01 completed in 6 min
-- Trend: Stable (greenfield frontend scaffold fast despite peer dep resolution)
+- Phase 5 plan 02 completed in 5 min
+- Phase 5 plan 03 completed in 3 min
+- Phase 5 plan 04 completed in 2 min
+- Trend: Accelerating (Wave 3 wiring leverages established patterns from Waves 1-2)
 
 ## Accumulated Context
 
@@ -64,6 +67,8 @@ Recent decisions affecting current work:
 - [P4-04]: Labels endpoint uses upsert with on_conflict=sample_id for idempotent saves
 - [P5-01]: Used --legacy-peer-deps for react-konva peer dep resolution (react 19.1.0 vs ^19.2.0)
 - [P5-01]: nextPanelId monotonic counter avoids ID reuse after panel deletion (Pitfall 7 mitigated)
+- [P5-04]: SnapPreviewLayer reads directly from Zustand store (zero props, consistent with other canvas layers)
+- [P5-04]: Valence dots use size+color redundancy (radius 5/7/9) for colorblind accessibility
 
 ### Pending Todos
 
@@ -84,6 +89,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-04-19
-Stopped at: Completed 05-01-PLAN.md
-Resume file: .planning/phases/05-labeling-dashboard/05-02-PLAN.md
-Next action: /gsd-execute-phase 5 (plan 02)
+Stopped at: Completed 05-04-PLAN.md
+Resume file: .planning/phases/05-labeling-dashboard/05-05-PLAN.md
+Next action: /gsd-execute-phase 5 (plan 05)

@@ -109,7 +109,7 @@ Plans:
 - [x] 05-01-PLAN.md -- Next.js scaffold, Zod schemas, API client, Zustand store, backend errors endpoint (DASH-01, DASH-05, OBSERVABILITY-01b)
 - [x] 05-02-PLAN.md -- Konva canvas, polygon drawing, magnet snap, auto-close, panel palette (DASH-01, DASH-02, DASH-06)
 - [x] 05-03-PLAN.md -- Keyboard shortcuts, undo/redo, LabelingHeader, LabelingToolbar (DASH-03)
-- [ ] 05-04-PLAN.md -- Snap preview overlay, save labels, error capture wiring (DASH-04, DASH-05, OBSERVABILITY-01b)
+- [x] 05-04-PLAN.md -- Snap preview overlay, save labels, error capture wiring (DASH-04, DASH-05, OBSERVABILITY-01b)
 - [ ] 05-05-PLAN.md -- Playwright E2E tests for labeler flows (TESTING-01a)
 **UI hint**: yes
 
@@ -136,10 +136,10 @@ Plans:
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
 | 4. FastAPI Sidecar | v2.0 | 4/4 | Complete | 2026-04-19 |
-| 5. Labeling Dashboard | v2.0 | 3/5 | Executing | - |
+| 5. Labeling Dashboard | v2.0 | 4/5 | Executing | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 5 plans 02+03 complete (Konva canvas + keyboard shortcuts)*
+*Last updated: 2026-04-19 -- Phase 5 plan 04 complete (snap preview + save + error capture)*

@@ -61,7 +61,7 @@ All 22 requirements delivered. See traceability table below.
 - [x] **DASH-01**: Per-sample labeling route (`/labeling/[sampleId]`) with Konva canvas on hillshade
 - [ ] **DASH-02**: Shared-node magnet (12px snap radius, shift-click override, visual indicator)
 - [ ] **DASH-03**: Undo/redo via Zustand + zundo, Cmd+Z / Cmd+Shift+Z
-- [ ] **DASH-04**: Snap preview mode with valence-colored feature dots
+- [x] **DASH-04**: Snap preview mode with valence-colored feature dots
 - [x] **DASH-05**: Output mask.json compatible with `polygons_from_clicks`
 - [ ] **DASH-06**: Auto-close polygon when cursor within 10px of first vertex (prevents duplicate corners)
 
@@ -140,7 +140,7 @@ All 22 requirements delivered. See traceability table below.
 | DASH-01 | Phase 5 | Complete (05-01) |
 | DASH-02 | Phase 5 | Not started |
 | DASH-03 | Phase 5 | Not started |
-| DASH-04 | Phase 5 | Not started |
+| DASH-04 | Phase 5 | Complete (05-04) |
 | DASH-05 | Phase 5 | Complete (05-01) |
 | DASH-06 | Phase 5 | Not started |
 | OBSERVABILITY-01b | Phase 5 | Complete (05-01) |
