@@ -80,11 +80,20 @@ export const useLabelerStore = create<LabelerState>()(
 
       moveVertex: (panelIndex: number, vertexIndex: number, x: number, y: number) =>
         set((state) => {
-          const panels = state.panels.map((p, i) => {
-            if (i !== panelIndex) return p;
-            const newCorners = p.corners_pix.map((c, ci) =>
-              ci === vertexIndex ? [x, y] : c,
-            );
+          // Find the old position of the dragged vertex
+          const oldPos = state.panels[panelIndex].corners_pix[vertexIndex];
+          const SHARED_THRESHOLD = 1.0; // pixels — vertices within 1px are considered shared
+
+          // Move matching vertices across ALL panels (shared node behavior)
+          const panels = state.panels.map((p) => {
+            const newCorners = p.corners_pix.map((c) => {
+              const dx = c[0] - oldPos[0];
+              const dy = c[1] - oldPos[1];
+              if (Math.sqrt(dx * dx + dy * dy) < SHARED_THRESHOLD) {
+                return [x, y];
+              }
+              return c;
+            });
             return { ...p, corners_pix: newCorners };
           });
           return { panels, snapPreview: null };

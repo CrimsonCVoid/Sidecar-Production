@@ -41,14 +41,16 @@ export function PolygonLayer({
   onInsertVertex,
   scale = 1,
 }: PolygonLayerProps) {
-  // Scale-independent sizes: divide by zoom so they stay constant on screen
   const inv = 1 / scale;
-  const vertexR = 3 * inv;
-  const midpointR = 2 * inv;
-  const strokeW = 1 * inv;
-  const selectedStrokeW = 2 * inv;
-  const fontSize = 10 * inv;
-  const labelOffset = 6 * inv;
+  const vertexR = 5 * inv;
+  const editVertexR = 7 * inv;
+  const midpointR = 5 * inv;
+  const strokeW = 1.5 * inv;
+  const selectedStrokeW = 2.5 * inv;
+  const fontSize = 11 * inv;
+  const labelOffset = 7 * inv;
+
+  const isEditMode = mode === "edit";
 
   return (
     <>
@@ -57,7 +59,7 @@ export function PolygonLayer({
         const isSelected = selectedPanelIndex === index;
         const points = panel.corners_pix.flat();
         const centroid = computeCentroid(panel.corners_pix);
-        const isEditable = mode === "edit" && isSelected;
+        const isEditable = isEditMode && isSelected;
 
         return (
           <Group key={panel.id}>
@@ -68,9 +70,9 @@ export function PolygonLayer({
               fill={`${color}40`}
               stroke={isSelected ? "#3b82f6" : `${color}cc`}
               strokeWidth={isSelected ? selectedStrokeW : strokeW}
-              listening={mode === "select" || mode === "edit"}
+              listening={mode === "select" || isEditMode}
               onClick={() => {
-                if (mode === "select" || mode === "edit") {
+                if (mode === "select" || isEditMode) {
                   onSelectPanel(index);
                 }
               }}
@@ -87,49 +89,64 @@ export function PolygonLayer({
               listening={false}
             />
 
-            {/* Corner vertices — draggable in edit mode */}
+            {/* Corner vertices */}
             {panel.corners_pix.map((corner, ci) => (
               <Circle
                 key={`v-${ci}`}
                 x={corner[0]}
                 y={corner[1]}
-                radius={isEditable ? vertexR * 1.5 : vertexR}
+                radius={isEditable ? editVertexR : vertexR}
                 fill={isEditable ? "#3b82f6" : "#ffffff"}
                 stroke={isEditable ? "#ffffff" : color}
                 strokeWidth={strokeW}
-                draggable={isEditable}
-                listening={isEditable}
+                draggable={isEditMode}
+                listening={isEditMode}
+                onDragMove={(e: KonvaEventObject<DragEvent>) => {
+                  // Live update during drag for real-time shared vertex feedback
+                  if (isEditMode && onMoveVertex) {
+                    onMoveVertex(index, ci, e.target.x(), e.target.y());
+                  }
+                }}
                 onDragEnd={(e: KonvaEventObject<DragEvent>) => {
-                  if (isEditable && onMoveVertex) {
+                  if (isEditMode && onMoveVertex) {
                     onMoveVertex(index, ci, e.target.x(), e.target.y());
                   }
                 }}
               />
             ))}
 
-            {/* Edge midpoint connectors — only in edit mode for selected panel */}
+            {/* Edge midpoint connectors — in edit mode for selected panel */}
             {isEditable &&
               panel.corners_pix.map((corner, ci) => {
                 const next = panel.corners_pix[(ci + 1) % panel.corners_pix.length];
                 const mx = (corner[0] + next[0]) / 2;
                 const my = (corner[1] + next[1]) / 2;
                 return (
-                  <Circle
-                    key={`m-${ci}`}
-                    x={mx}
-                    y={my}
-                    radius={midpointR}
-                    fill="transparent"
-                    stroke="#3b82f6"
-                    strokeWidth={strokeW}
-                    dash={[2 * inv, 2 * inv]}
-                    listening={true}
-                    onClick={() => {
-                      if (onInsertVertex) {
-                        onInsertVertex(index, ci, mx, my);
-                      }
-                    }}
-                  />
+                  <Group key={`m-${ci}`}>
+                    {/* Invisible larger hit area */}
+                    <Circle
+                      x={mx}
+                      y={my}
+                      radius={midpointR * 2}
+                      fill="transparent"
+                      listening={true}
+                      onClick={() => {
+                        if (onInsertVertex) {
+                          onInsertVertex(index, ci, mx, my);
+                        }
+                      }}
+                    />
+                    {/* Visible small dot */}
+                    <Circle
+                      x={mx}
+                      y={my}
+                      radius={midpointR * 0.6}
+                      fill="#3b82f680"
+                      stroke="#3b82f6"
+                      strokeWidth={strokeW * 0.5}
+                      listening={false}
+                    />
+                  </Group>
                 );
               })}
           </Group>
