@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Stage, Layer, Image as KonvaImage } from "react-konva";
 import useImage from "use-image";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -42,10 +42,13 @@ function findNearestVertex(
 
 interface HillshadeCanvasProps {
   sampleId: string;
+  showHeatmap: boolean;
+  heatmapOpacity: number;
 }
 
-export function HillshadeCanvas({ sampleId }: HillshadeCanvasProps) {
+export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: HillshadeCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<{ x: () => number; y: () => number; scaleX: () => number; scaleY: () => number; scale: (s: { x: number; y: number }) => void; position: (p: { x: number; y: number }) => void; getPointerPosition: () => { x: number; y: number } | null } | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
 
   const [cursorPosition, setCursorPosition] = useState<{
@@ -71,7 +74,27 @@ export function HillshadeCanvas({ sampleId }: HillshadeCanvasProps) {
 
   // Hillshade image loading
   const hillshadeUrl = `${API_BASE}/api/hillshade/${sampleId}`;
-  const [image] = useImage(hillshadeUrl, "anonymous");
+  const [image, imageStatus] = useImage(hillshadeUrl, "anonymous");
+
+  // Heatmap image loading
+  const heatmapUrl = `${API_BASE}/api/hillshade/${sampleId}/heatmap`;
+  const [heatmapImage] = useImage(heatmapUrl, "anonymous");
+
+  // Auto-fit image to canvas on first load
+  const [hasFitImage, setHasFitImage] = useState(false);
+  useEffect(() => {
+    if (image && !hasFitImage && stageRef.current) {
+      const stage = stageRef.current;
+      const scaleX = dimensions.width / image.width;
+      const scaleY = dimensions.height / image.height;
+      const fitScale = Math.min(scaleX, scaleY) * 0.95;
+      const offsetX = (dimensions.width - image.width * fitScale) / 2;
+      const offsetY = (dimensions.height - image.height * fitScale) / 2;
+      stage.scale({ x: fitScale, y: fitScale });
+      stage.position({ x: offsetX, y: offsetY });
+      setHasFitImage(true);
+    }
+  }, [image, hasFitImage, dimensions]);
 
   // ResizeObserver for responsive canvas
   useEffect(() => {
@@ -143,7 +166,6 @@ export function HillshadeCanvas({ sampleId }: HillshadeCanvasProps) {
     if (!coords) return;
 
     if (mode === "select") {
-      // If clicking on the stage background (not on a polygon), deselect
       if (e.target === stage) {
         selectPanel(null);
       }
@@ -206,46 +228,53 @@ export function HillshadeCanvas({ sampleId }: HillshadeCanvasProps) {
 
   return (
     <div ref={containerRef} className="w-full h-full">
-      {!image && (
+      {imageStatus === "loading" && (
         <div className="flex items-center justify-center h-full text-zinc-500">
           Loading hillshade...
         </div>
       )}
-      {(image || true) && (
-        <Stage
-          width={dimensions.width}
-          height={dimensions.height}
-          draggable={true}
-          onClick={handleStageClick}
-          onMouseMove={handleMouseMove}
-          onWheel={handleWheel}
-        >
-          <Layer>
-            {image && <KonvaImage image={image} />}
-            <PolygonLayer
-              panels={panels}
-              selectedPanelIndex={selectedPanelIndex}
-              mode={mode}
-              onSelectPanel={selectPanel}
-            />
-            <DrawingLayer
-              activeDrawing={activeDrawing}
-              cursorPosition={cursorPosition}
-            />
-            <MagnetIndicator
-              x={magnetTarget?.x ?? 0}
-              y={magnetTarget?.y ?? 0}
-              visible={magnetTarget !== null}
-            />
-            <AutoCloseIndicator
-              x={autoCloseTarget?.x ?? 0}
-              y={autoCloseTarget?.y ?? 0}
-              visible={autoCloseTarget !== null}
-            />
-            <SnapPreviewLayer />
-          </Layer>
-        </Stage>
+      {imageStatus === "failed" && (
+        <div className="flex items-center justify-center h-full text-red-400">
+          Failed to load hillshade image
+        </div>
       )}
+      <Stage
+        ref={stageRef as React.RefObject<never>}
+        width={dimensions.width}
+        height={dimensions.height}
+        draggable={true}
+        onClick={handleStageClick}
+        onMouseMove={handleMouseMove}
+        onWheel={handleWheel}
+      >
+        <Layer>
+          {image && <KonvaImage image={image} />}
+          {showHeatmap && heatmapImage && (
+            <KonvaImage image={heatmapImage} opacity={heatmapOpacity} />
+          )}
+          <PolygonLayer
+            panels={panels}
+            selectedPanelIndex={selectedPanelIndex}
+            mode={mode}
+            onSelectPanel={selectPanel}
+          />
+          <DrawingLayer
+            activeDrawing={activeDrawing}
+            cursorPosition={cursorPosition}
+          />
+          <MagnetIndicator
+            x={magnetTarget?.x ?? 0}
+            y={magnetTarget?.y ?? 0}
+            visible={magnetTarget !== null}
+          />
+          <AutoCloseIndicator
+            x={autoCloseTarget?.x ?? 0}
+            y={autoCloseTarget?.y ?? 0}
+            visible={autoCloseTarget !== null}
+          />
+          <SnapPreviewLayer />
+        </Layer>
+      </Stage>
     </div>
   );
 }

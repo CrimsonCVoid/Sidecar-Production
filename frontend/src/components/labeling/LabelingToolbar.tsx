@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, MousePointer2, Undo2, Redo2, Trash2, Zap } from "lucide-react";
+import { Pencil, MousePointer2, Undo2, Redo2, Trash2, Zap, Flame } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -15,9 +15,20 @@ import { useLabelerStore } from "@/stores/labeler-store";
 interface LabelingToolbarProps {
   onSnapPreview?: () => void;
   isLoadingPreview?: boolean;
+  showHeatmap?: boolean;
+  onToggleHeatmap?: () => void;
+  heatmapOpacity?: number;
+  onHeatmapOpacityChange?: (v: number) => void;
 }
 
-export function LabelingToolbar({ onSnapPreview, isLoadingPreview }: LabelingToolbarProps) {
+export function LabelingToolbar({
+  onSnapPreview,
+  isLoadingPreview,
+  showHeatmap = false,
+  onToggleHeatmap,
+  heatmapOpacity = 0.5,
+  onHeatmapOpacityChange,
+}: LabelingToolbarProps) {
   const mode = useLabelerStore((s) => s.mode);
   const setMode = useLabelerStore((s) => s.setMode);
   const selectedPanelIndex = useLabelerStore((s) => s.selectedPanelIndex);
@@ -141,6 +152,43 @@ export function LabelingToolbar({ onSnapPreview, isLoadingPreview }: LabelingToo
           />
           <TooltipContent>Run snap preview on current panels</TooltipContent>
         </Tooltip>
+
+        <Separator orientation="vertical" className="mx-2 h-6" />
+
+        {/* Heatmap toggle + opacity */}
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant={showHeatmap ? "default" : "ghost"}
+                size="sm"
+                onClick={onToggleHeatmap}
+                className={showHeatmap ? "bg-orange-600 hover:bg-orange-700" : ""}
+                aria-label="Toggle elevation heatmap"
+              >
+                <Flame className="h-4 w-4 mr-1" />
+                Heatmap
+              </Button>
+            }
+          />
+          <TooltipContent>Toggle elevation heatmap overlay</TooltipContent>
+        </Tooltip>
+
+        {showHeatmap && (
+          <div className="flex items-center gap-2 ml-1">
+            <span className="text-xs text-zinc-400">Opacity</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={heatmapOpacity}
+              onChange={(e) => onHeatmapOpacityChange?.(parseFloat(e.target.value))}
+              className="w-20 h-1 accent-orange-500"
+            />
+            <span className="text-xs text-zinc-500 w-8">{Math.round(heatmapOpacity * 100)}%</span>
+          </div>
+        )}
 
         {/* Spacer + panel count badge */}
         <div className="flex-1" />

@@ -72,7 +72,7 @@ def _get_data_layers(lat: float, lng: float, api_key: str) -> dict:
         params={
             "location.latitude": lat,
             "location.longitude": lng,
-            "radiusMeters": 100,
+            "radiusMeters": 50,
             "view": "FULL_LAYERS",
             "requiredQuality": "HIGH",
             "pixelSizeMeters": 0.1,

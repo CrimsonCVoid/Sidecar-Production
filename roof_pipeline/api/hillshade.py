@@ -1,19 +1,18 @@
-"""Hillshade rendering endpoint: GET /api/hillshade/{sampleId}.
+"""Hillshade and heatmap rendering: GET /api/hillshade/{sampleId}, GET /api/hillshade/{sampleId}/heatmap.
 
-Downloads the DSM GeoTIFF from Supabase Storage, renders a hillshade PNG
-using matplotlib, and returns it as an image response. Cached in-memory
-per sample_id to avoid re-rendering on every request.
+Downloads the DSM GeoTIFF from Supabase Storage, renders as hillshade or
+elevation heatmap PNG, returns as image response.
 """
 
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from io import BytesIO
 
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+from PIL import Image
 from supabase import Client
 
 from .config import Settings
@@ -24,51 +23,8 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _render_hillshade(dsm: np.ndarray, azimuth: float = 315, altitude: float = 45) -> np.ndarray:
-    """Render a hillshade from a DSM array. Returns uint8 grayscale."""
-    az_rad = np.radians(azimuth)
-    alt_rad = np.radians(altitude)
-
-    # Gradient
-    dy, dx = np.gradient(dsm)
-    slope = np.arctan(np.sqrt(dx * dx + dy * dy))
-    aspect = np.arctan2(-dy, dx)
-
-    shade = np.sin(alt_rad) * np.cos(slope) + np.cos(alt_rad) * np.sin(slope) * np.cos(az_rad - aspect)
-    shade = np.clip(shade, 0, 1)
-
-    # Handle NaN
-    shade = np.nan_to_num(shade, nan=0.5)
-    return (shade * 255).astype(np.uint8)
-
-
-def _encode_png(arr: np.ndarray) -> bytes:
-    """Encode a 2D uint8 array as PNG bytes."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(1, 1, figsize=(arr.shape[1] / 100, arr.shape[0] / 100), dpi=100)
-    ax.imshow(arr, cmap="gray", vmin=0, vmax=255)
-    ax.set_axis_off()
-    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
-    buf = BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", pad_inches=0, dpi=100)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
-
-
-@router.get("/{sample_id}")
-async def get_hillshade(
-    sample_id: str,
-    request: Request,
-    settings: Settings = Depends(get_settings),
-    supabase: Client = Depends(get_supabase),
-):
-    """Render and return a hillshade PNG for a training sample's DSM."""
-    # Look up DSM storage path
+def _load_dsm(supabase: Client, settings: Settings, sample_id: str) -> np.ndarray:
+    """Look up and download DSM for a sample, return as numpy array."""
     result = (
         supabase.table("training_samples")
         .select("dsm_storage_path")
@@ -82,28 +38,102 @@ async def get_hillshade(
     if not dsm_path:
         raise HTTPException(status_code=404, detail="No DSM available for this sample")
 
-    # Download DSM from storage
-    try:
-        dsm_bytes = supabase.storage.from_(settings.training_bucket).download(dsm_path)
-    except Exception:
-        # Try pipeline-outputs bucket as fallback
+    # Download from storage (try training bucket first, then pipeline bucket)
+    dsm_bytes = None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
         try:
-            dsm_bytes = supabase.storage.from_(settings.storage_bucket).download(dsm_path)
-        except Exception as exc:
-            raise HTTPException(status_code=404, detail=f"Could not download DSM: {exc}") from exc
+            dsm_bytes = supabase.storage.from_(bucket).download(dsm_path)
+            break
+        except Exception:
+            continue
+    if dsm_bytes is None:
+        raise HTTPException(status_code=404, detail=f"Could not download DSM from storage")
 
-    # Load with rasterio
-    try:
-        import rasterio
-        with rasterio.open(BytesIO(dsm_bytes)) as ds:
-            dsm_arr = ds.read(1)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to read DSM GeoTIFF: {exc}") from exc
+    import rasterio
 
-    # Render hillshade
+    with rasterio.open(BytesIO(dsm_bytes)) as ds:
+        return ds.read(1)
+
+
+def _render_hillshade(dsm: np.ndarray, azimuth: float = 315, altitude: float = 45) -> np.ndarray:
+    """Render a hillshade from a DSM array. Returns uint8 grayscale."""
+    az_rad = np.radians(azimuth)
+    alt_rad = np.radians(altitude)
+
+    dy, dx = np.gradient(dsm)
+    slope = np.arctan(np.sqrt(dx * dx + dy * dy))
+    aspect = np.arctan2(-dy, dx)
+
+    shade = np.sin(alt_rad) * np.cos(slope) + np.cos(alt_rad) * np.sin(slope) * np.cos(az_rad - aspect)
+    shade = np.clip(shade, 0, 1)
+    shade = np.nan_to_num(shade, nan=0.5)
+    return (shade * 255).astype(np.uint8)
+
+
+def _render_heatmap(dsm: np.ndarray) -> np.ndarray:
+    """Render DSM elevation as RGBA heatmap. Returns (H, W, 4) uint8."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    arr = dsm.copy().astype(np.float64)
+    valid = ~np.isnan(arr)
+    if valid.any():
+        vmin, vmax = np.nanmin(arr), np.nanmax(arr)
+        if vmax > vmin:
+            arr = (arr - vmin) / (vmax - vmin)
+        else:
+            arr[:] = 0.5
+    else:
+        arr[:] = 0.0
+
+    arr = np.nan_to_num(arr, nan=0.0)
+    colored = cm.inferno(arr)  # returns (H, W, 4) float [0,1]
+    return (colored * 255).astype(np.uint8)
+
+
+def _to_png(arr: np.ndarray) -> bytes:
+    """Encode numpy array as PNG bytes via Pillow. No matplotlib axis chrome."""
+    if arr.ndim == 2:
+        img = Image.fromarray(arr, mode="L")
+    else:
+        img = Image.fromarray(arr, mode="RGBA")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf.read()
+
+
+@router.get("/{sample_id}")
+async def get_hillshade(
+    sample_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    supabase: Client = Depends(get_supabase),
+):
+    """Render and return a hillshade PNG for a training sample's DSM."""
+    dsm_arr = _load_dsm(supabase, settings, sample_id)
     shade = _render_hillshade(dsm_arr)
-    png_bytes = _encode_png(shade)
+    png_bytes = _to_png(shade)
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
+
+@router.get("/{sample_id}/heatmap")
+async def get_heatmap(
+    sample_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    supabase: Client = Depends(get_supabase),
+):
+    """Render and return a DSM elevation heatmap PNG (inferno colormap, RGBA)."""
+    dsm_arr = _load_dsm(supabase, settings, sample_id)
+    heatmap = _render_heatmap(dsm_arr)
+    png_bytes = _to_png(heatmap)
     return Response(
         content=png_bytes,
         media_type="image/png",

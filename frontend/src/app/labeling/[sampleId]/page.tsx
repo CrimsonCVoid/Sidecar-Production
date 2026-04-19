@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect } from "react";
+import { use, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import { useLabelerStore } from "@/stores/labeler-store";
@@ -119,6 +119,9 @@ export default function LabelingPage({
     }
   };
 
+  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [heatmapOpacity, setHeatmapOpacity] = useState(0.5);
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950">
       <LabelingHeader
@@ -129,9 +132,17 @@ export default function LabelingPage({
       <LabelingToolbar
         onSnapPreview={handleSnapPreview}
         isLoadingPreview={isLoadingPreview}
+        showHeatmap={showHeatmap}
+        onToggleHeatmap={() => setShowHeatmap((v) => !v)}
+        heatmapOpacity={heatmapOpacity}
+        onHeatmapOpacityChange={setHeatmapOpacity}
       />
       <div className="flex-1" data-testid="labeler-canvas">
-        <HillshadeCanvas sampleId={sampleId} />
+        <HillshadeCanvas
+          sampleId={sampleId}
+          showHeatmap={showHeatmap}
+          heatmapOpacity={heatmapOpacity}
+        />
       </div>
     </div>
   );
