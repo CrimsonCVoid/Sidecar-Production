@@ -7,16 +7,7 @@ import pytest
 
 from roof_pipeline.planes import Plane
 from roof_pipeline.panel_snap_v2.clustering import cluster_vertices
-
-
-def _make_plane(normal=(0, 0, 1), centroid=(0, 0, 5)):
-    """Helper: build a horizontal Plane."""
-    n = np.array(normal, dtype=float)
-    n /= np.linalg.norm(n)
-    if n[2] < 0:
-        n = -n
-    c = np.array(centroid, dtype=float)
-    return Plane(normal=n, centroid=c, rms_residual=0.01, d=float(n @ c))
+from .conftest import _make_plane
 
 
 class TestTransitiveCluster:

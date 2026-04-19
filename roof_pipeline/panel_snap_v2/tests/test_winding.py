@@ -7,17 +7,7 @@ import pytest
 
 from roof_pipeline.planes import Plane
 from roof_pipeline.panel_snap_v2.winding import normalize_winding
-
-
-def _make_plane(normal, centroid):
-    """Helper: build a Plane from normal and centroid."""
-    normal = np.array(normal, dtype=float)
-    normal /= np.linalg.norm(normal)
-    if normal[2] < 0:
-        normal = -normal
-    centroid = np.array(centroid, dtype=float)
-    d = float(normal @ centroid)
-    return Plane(normal=normal, centroid=centroid, rms_residual=0.01, d=d)
+from .conftest import _make_plane
 
 
 class TestLShapedWinding:
