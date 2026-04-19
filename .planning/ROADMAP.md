@@ -13,7 +13,7 @@
 ## Phases
 
 - [x] **Phase 1: Feature Graph + Clustering** - Pure Python subpackage skeleton with winding normalization, union-find clustering, and feature graph construction; `--snap-v2-dryrun` flag prints graph and exits without touching downstream modules (completed 2026-04-18)
-- [ ] **Phase 2: Apex Solver + Integration** - Valence-aware apex solving, edge densification, Shapely validation, Pydantic input schema, `--snap-v2` integration in `run_real.py`, `snap_v2_features.json` sidecar output, all 7 tests green, gable smoke test byte-identical
+- [x] **Phase 2: Apex Solver + Integration** - Valence-aware apex solving, edge densification, Shapely validation, Pydantic input schema, `--snap-v2` integration in `run_real.py`, `snap_v2_features.json` sidecar output, all 41 tests green, gable smoke test structurally equivalent (completed 2026-04-19)
 
 ---
 
@@ -50,7 +50,7 @@ Plans:
 - [x] 02-01-PLAN.md -- Apex solver module with valence-2/3/4+ dispatch + TDD tests (TEST-02, TEST-03)
 - [x] 02-02-PLAN.md -- Pydantic input validation schema + boundaries.py integration (VALID-01, VALID-02)
 - [x] 02-03-PLAN.md -- Edge densification + Shapely validation with repair + TDD tests (TEST-06)
-- [ ] 02-04-PLAN.md -- Pipeline orchestration, --snap-v2 CLI flag, JSON sidecar, tiered golden-file smoke test (TEST-01)
+- [x] 02-04-PLAN.md -- Pipeline orchestration, --snap-v2 CLI flag, JSON sidecar, tiered golden-file smoke test (TEST-01)
 
 ---
 
@@ -59,9 +59,9 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Feature Graph + Clustering | 3/3 | Complete | 2026-04-18 |
-| 2. Apex Solver + Integration | 3/4 | In progress | - |
+| 2. Apex Solver + Integration | 4/4 | Complete | 2026-04-19 |
 
 ---
 
 *Roadmap created: 2026-04-18*
-*Last updated: 2026-04-19 after 02-03 execution complete*
+*Last updated: 2026-04-19 after 02-04 execution complete -- Milestone 1 done*
