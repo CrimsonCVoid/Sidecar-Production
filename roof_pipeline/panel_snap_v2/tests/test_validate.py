@@ -45,12 +45,14 @@ class TestSelfIntersectingRepair:
         from shapely.geometry import Polygon as ShapelyPolygon
         from roof_pipeline.panel_snap_v2.winding import _project_to_2d
 
-        # Bowtie: edges cross at the center
+        # Asymmetric bowtie: edges cross near one end so one triangle is
+        # much larger than the other (ratio ~0.99, area change ~0.01%).
+        # make_valid splits into MultiPolygon, largest piece kept (ratio > 0.95).
         bowtie = np.array([
             [0.0, 0.0, 5.0],
-            [2.0, 2.0, 5.0],
-            [2.0, 0.0, 5.0],
-            [0.0, 2.0, 5.0],
+            [10.0, 0.1, 5.0],
+            [10.0, 0.0, 5.0],
+            [0.0, 10.0, 5.0],
         ])
         plane = _make_plane()
         polygons = {1: bowtie}
@@ -124,17 +126,20 @@ class TestAreaChangeThresholds:
 
     def test_area_change_warning_threshold(self, caplog):
         """make_valid changes area by between 0.1% and 1%. WARNING logged."""
-        # Build a slightly self-intersecting polygon where make_valid trims
-        # a small amount (between 0.1% and 1%)
-        # A nearly-valid polygon with a very slight self-intersection
-        # The "dent" creates a tiny bowtie that make_valid clips
+        # A polygon with a "notch" that doubles back over the top edge,
+        # creating a self-intersection. The overlap area (~50 sq units) is
+        # ~0.5% of the total (~10050 sq units), in the warning band.
+        # make_valid clips the overlap, producing a GeometryCollection
+        # with the main polygon and a degenerate linestring.
         poly = np.array([
             [0.0, 0.0, 5.0],
-            [10.0, 0.0, 5.0],
-            [10.0, 10.0, 5.0],
-            [5.05, 5.0, 5.0],   # crosses just past the midline
-            [4.95, 5.0, 5.0],   # creating tiny self-intersection
-            [0.0, 10.0, 5.0],
+            [100.0, 0.0, 5.0],
+            [100.0, 100.0, 5.0],
+            [30.0, 100.0, 5.0],
+            [30.0, 95.0, 5.0],    # dips 5 units inside
+            [40.0, 95.0, 5.0],    # 10-unit wide notch
+            [40.0, 100.0, 5.0],   # back to top edge -- self-intersects
+            [0.0, 100.0, 5.0],
         ])
         plane = _make_plane()
         polygons = {1: poly}
@@ -153,18 +158,21 @@ class TestAreaChangeThresholds:
 
     def test_area_change_hard_fail(self):
         """make_valid changes area by >= 1%. RuntimeError raised."""
-        # A polygon where make_valid removes significant area
-        # A severely self-intersecting polygon (large bowtie)
-        # The two halves have roughly equal area but the bowtie intersection
-        # causes make_valid to discard ~half
-        bowtie = np.array([
+        # A polygon with a large overlap notch that causes ~2.9% area change.
+        # make_valid produces a GeometryCollection with one polygon (no ratio
+        # issue), but the area change exceeds the 1% hard-fail threshold.
+        poly = np.array([
             [0.0, 0.0, 5.0],
-            [4.0, 4.0, 5.0],
-            [4.0, 0.0, 5.0],
-            [0.0, 4.0, 5.0],
+            [100.0, 0.0, 5.0],
+            [100.0, 100.0, 5.0],
+            [60.0, 100.0, 5.0],
+            [60.0, 85.0, 5.0],    # deep notch going 15 units inside
+            [80.0, 85.0, 5.0],    # 20-unit wide
+            [80.0, 100.0, 5.0],   # back to top edge -- self-intersects
+            [0.0, 100.0, 5.0],
         ])
         plane = _make_plane()
-        polygons = {1: bowtie}
+        polygons = {1: poly}
         planes = {1: plane}
 
         with pytest.raises(RuntimeError, match="repair changed polygon area"):
@@ -179,42 +187,33 @@ class TestMultiPolygonHandling:
         from shapely.geometry import Polygon as ShapelyPolygon
         from roof_pipeline.panel_snap_v2.winding import _project_to_2d
 
-        # Bowtie where one triangle is much larger than the other
-        # make_valid splits bowties into separate triangles
-        # Make one triangle ~96% of the total area
-        bowtie = np.array([
-            [0.0, 0.0, 5.0],
-            [10.0, 0.0, 5.0],
-            [5.0, 5.0, 5.0],  # the crossing point
-            [5.0, 5.1, 5.0],  # small triangle above crossing
-            [4.9, 5.05, 5.0],
-        ])
-        plane = _make_plane()
-
-        # Build a polygon that will make_valid into MultiPolygon with
-        # dominant largest piece (ratio >= 0.95)
-        # Using a self-intersecting shape that splits into a large and tiny piece
-        # The narrow bowtie: one big triangle, one tiny sliver
+        # Asymmetric bowtie: one large triangle + one tiny triangle.
+        # Edge (0,0)-(10,0.1) crosses edge (10,0)-(0,10) near one end.
+        # Ratio ~0.9999, area change ~0.01% (well under 1% hard-fail).
         poly = np.array([
             [0.0, 0.0, 5.0],
+            [10.0, 0.1, 5.0],
             [10.0, 0.0, 5.0],
-            [0.1, 0.1, 5.0],   # crosses near origin -- tiny piece
             [0.0, 10.0, 5.0],
         ])
+        plane = _make_plane()
         polygons = {1: poly}
         planes = {1: plane}
 
         with caplog.at_level(logging.WARNING):
-            try:
-                result = validate_polygons(polygons, planes, stage="densify", repair=True)
-                # If it succeeds, the largest piece was kept
-                repaired_2d = _project_to_2d(result[1], plane)
-                shp = ShapelyPolygon(repaired_2d)
-                assert shp.is_valid
-            except RuntimeError:
-                # If the area change is too large, that is also acceptable
-                # for this test -- the MultiPolygon path was exercised
-                pass
+            result = validate_polygons(polygons, planes, stage="densify", repair=True)
+
+        # Verify the result is a valid polygon (largest piece kept)
+        repaired_2d = _project_to_2d(result[1], plane)
+        shp = ShapelyPolygon(repaired_2d)
+        assert shp.is_valid, f"Repaired polygon should be valid, got: {shp}"
+
+        # Verify MultiPolygon WARNING was logged
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        multi_warnings = [r for r in warnings if "MultiPolygon" in r.message]
+        assert len(multi_warnings) >= 1, (
+            f"Expected MultiPolygon WARNING, got: {[r.message for r in warnings]}"
+        )
 
     def test_multipolygon_ratio_too_low_fails(self):
         """make_valid returns MultiPolygon where largest piece is < 95%.
