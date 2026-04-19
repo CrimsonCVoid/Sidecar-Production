@@ -3,6 +3,13 @@
 Usage:
     python -m roof_pipeline.run_real path/to/dsm.tif path/to/mask.npy \
         [--out-dir output_real]
+
+Programmatic usage (from API or other callers):
+    from roof_pipeline.run_real import run_pipeline, _load_dsm
+
+    dsm, res_m = _load_dsm(Path("dsm.tif"))
+    mask = np.load("mask.npy").astype(np.uint8)
+    paths = run_pipeline(dsm, mask, res_m, Path("/tmp/out"), use_snap_v2=True)
 """
 
 from __future__ import annotations
@@ -44,6 +51,172 @@ def _load_dsm(path: Path) -> tuple[np.ndarray, float]:
     return dsm, res_m
 
 
+# ---------------------------------------------------------------------------
+# Callable pipeline entry point (used by both CLI and API)
+# ---------------------------------------------------------------------------
+
+def run_pipeline(
+    dsm: np.ndarray,
+    mask: np.ndarray,
+    res_m: float,
+    out_dir: Path,
+    *,
+    snap_tol: float = 1.0,
+    use_snap_v2: bool = False,
+    no_clicks: bool = False,
+    panels_json_path: Path | None = None,
+    project_name: str = "ROOF PROTOTYPE",
+    project_address: str = "ADDRESS UNKNOWN",
+    estimate_number: str | None = None,
+    coverage_in: float = 24.0,
+    profile: str = "SV",
+    waste_pct: float = 11.0,
+) -> dict[str, Path]:
+    """Execute the full roof pipeline on pre-loaded data arrays.
+
+    This is the programmatic entry point for the pipeline. The CLI ``main()``
+    is a thin wrapper that parses arguments, loads files, and delegates here.
+    The FastAPI ``/run-pipeline`` endpoint will also call this function after
+    receiving data via HTTP.
+
+    Parameters
+    ----------
+    dsm : np.ndarray
+        Elevation raster (float32, NaN for no-data).
+    mask : np.ndarray
+        Panel segmentation mask (uint8, 0=background).
+    res_m : float
+        Spatial resolution in meters per pixel.
+    out_dir : Path
+        Output directory (created if it does not exist).
+    snap_tol : float
+        Corner snap tolerance in meters.
+    use_snap_v2 : bool
+        Use topology-aware snap engine v2 instead of pairwise snap.
+    no_clicks : bool
+        If True, ignore panels_json_path and extract from mask contours.
+    panels_json_path : Path | None
+        Path to panels.json (click coordinates). If None or missing, falls
+        back to contour extraction from the mask.
+    project_name : str
+        Project name for shop drawings.
+    project_address : str
+        Project address for shop drawings.
+    estimate_number : str | None
+        Estimate number for shop drawings. If None, caller should provide one.
+    coverage_in : float
+        Panel coverage width in inches for shop drawings.
+    profile : str
+        Panel profile code for shop drawings.
+    waste_pct : float
+        Waste percentage for shop drawings.
+
+    Returns
+    -------
+    dict[str, Path]
+        Mapping of output names to file paths:
+        ``{"obj", "gltf", "pdf", "json", "ts_pdf", "shop_pdf",
+        "features_json" (only when use_snap_v2=True)}``.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # NaN-safety: clear mask where DSM has no data so plane fits never see NaN
+    mask = np.where(np.isnan(dsm), 0, mask).astype(np.uint8)
+
+    log.info("=== plane fits ===")
+    planes = fit_all_panels(dsm, mask, res_m)
+
+    # Prefer the click-coords path -- exactly N vertices, straight edges.
+    if panels_json_path is not None and panels_json_path.exists() and not no_clicks:
+        log.info("=== boundaries from clicks (%s) ===", panels_json_path.name)
+        polygons = polygons_from_clicks(panels_json_path, dsm, res_m, planes)
+    else:
+        log.info("=== boundaries from mask contours (fallback) ===")
+        polygons = extract_panel_polygons(mask, dsm, res_m, planes)
+
+    features_path: Path | None = None
+
+    if use_snap_v2:
+        log.info("=== snap-v2 engine (tol=%.3f m) ===", snap_tol)
+        polygons, feature_graph = snap_v2(polygons, planes, tol=snap_tol)
+
+        # Write snap_v2_features.json sidecar (INTG-02)
+        features_path = out_dir / "snap_v2_features.json"
+        with open(features_path, "w") as f:
+            json.dump(feature_graph, f, indent=2, sort_keys=True)
+        log.info("wrote snap_v2_features.json: %s", features_path)
+    else:
+        # Existing v1 snap path (unchanged)
+        if panels_json_path is not None and panels_json_path.exists() and not no_clicks:
+            # 2D (plan-view) adjacency: two panels are snapped/densified when
+            # they overlap in XY regardless of their elevation. Matters for
+            # roofs where a low patio abuts a tall main roof.
+            log.info("=== corner snapping (XY, tol=%.3f m) ===", snap_tol)
+            polygons = snap_shared_corners_xy(polygons, planes, tol=snap_tol)
+            log.info("=== edge densification (XY, tol=%.3f m) ===", snap_tol * 0.6)
+            polygons = densify_shared_edges_xy(polygons, planes, tol=snap_tol * 0.6)
+        else:
+            log.info("=== edge snapping (tol=%.3f m) ===", snap_tol)
+            polygons = snap_shared_edges(polygons, tol=snap_tol)
+
+    log.info("=== mesh ===")
+    mesh = build_roof_mesh(polygons, planes)
+    mesh_paths = export_mesh(mesh, out_dir)
+
+    log.info("=== cut sheets ===")
+    pdf_path = write_cutsheets_pdf(
+        polygons, planes, mesh, out_dir / "cutsheets.pdf",
+    )
+
+    log.info("=== TS exporter JSON ===")
+    json_path = write_ts_json(
+        polygons, planes, mesh, out_dir / "cutsheets.ts.json",
+    )
+
+    log.info("=== TS-render PDF (mirrors browser output) ===")
+    ts_pdf_path = render_pdf_from_json(
+        json_path, out_dir / "cutsheets.ts.pdf",
+    )
+
+    log.info("=== shop drawings PDF (Integrity-Metals format) ===")
+    project_meta = {
+        "estimate_number": estimate_number or "UNKNOWN",
+        "project_name": project_name,
+        "project_address": project_address,
+    }
+    roof_dict = roof_dict_from_pipeline(
+        polygons, planes, project_meta,
+        coverage_width_in=coverage_in,
+        waste_pct=waste_pct,
+        profile=profile,
+    )
+    shop_pdf_path = generate_shop_drawings(
+        roof_dict, out_dir / "shop_drawings.pdf",
+    )
+
+    result: dict[str, Path] = {
+        "obj": mesh_paths["obj"],
+        "gltf": mesh_paths["gltf"],
+        "pdf": pdf_path,
+        "json": json_path,
+        "ts_pdf": ts_pdf_path,
+        "shop_pdf": shop_pdf_path,
+    }
+    if features_path is not None:
+        result["features_json"] = features_path
+
+    log.info("DONE  obj=%s  gltf=%s  pdf=%s  json=%s  ts_pdf=%s  shop_pdf=%s",
+             result["obj"], result["gltf"], pdf_path, json_path,
+             ts_pdf_path, shop_pdf_path)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -71,8 +244,6 @@ def main():
                     help="use topology-aware snap engine v2 instead of pairwise snap")
     args = ap.parse_args()
 
-    args.out_dir.mkdir(parents=True, exist_ok=True)
-
     log.info("loading DSM %s", args.dsm)
     dsm, res_m = _load_dsm(args.dsm)
     log.info("DSM: shape=%s, res=%.3f m/px, nan=%.1f%%",
@@ -85,14 +256,13 @@ def main():
     panel_ids = sorted(int(i) for i in np.unique(mask) if i != 0)
     log.info("mask: %d panels (ids: %s)", len(panel_ids), panel_ids)
 
-    # NaN-safety: clear mask where DSM has no data so plane fits never see NaN
-    mask = np.where(np.isnan(dsm), 0, mask).astype(np.uint8)
-
-    log.info("=== plane fits ===")
-    planes = fit_all_panels(dsm, mask, res_m)
-
+    # CLI-only: snap-v2 dry-run early exit
     if args.snap_v2_dryrun:
+        # NaN-safety (same as run_pipeline)
+        mask = np.where(np.isnan(dsm), 0, mask).astype(np.uint8)
+
         log.info("=== snap-v2 dry-run ===")
+        planes = fit_all_panels(dsm, mask, res_m)
         # Build polygons from clicks or contours (same as production path)
         panels_json = args.mask.with_suffix(".json")
         if panels_json.exists() and not args.no_clicks:
@@ -103,76 +273,25 @@ def main():
         print_dryrun(graph)
         sys.exit(0)
 
-    # Prefer the click-coords path -- exactly N vertices, straight edges.
+    # Compute panels_json_path for run_pipeline
     panels_json = args.mask.with_suffix(".json")
+    panels_json_path: Path | None = None
     if panels_json.exists() and not args.no_clicks:
-        log.info("=== boundaries from clicks (%s) ===", panels_json.name)
-        polygons = polygons_from_clicks(panels_json, dsm, res_m, planes)
-    else:
-        log.info("=== boundaries from mask contours (fallback) ===")
-        polygons = extract_panel_polygons(mask, dsm, res_m, planes)
+        panels_json_path = panels_json
 
-    if args.snap_v2:
-        log.info("=== snap-v2 engine (tol=%.3f m) ===", args.snap_tol)
-        polygons, feature_graph = snap_v2(polygons, planes, tol=args.snap_tol)
-
-        # Write snap_v2_features.json sidecar (INTG-02)
-        features_path = args.out_dir / "snap_v2_features.json"
-        with open(features_path, "w") as f:
-            json.dump(feature_graph, f, indent=2, sort_keys=True)
-        log.info("wrote snap_v2_features.json: %s", features_path)
-    else:
-        # Existing v1 snap path (unchanged)
-        if panels_json.exists() and not args.no_clicks:
-            # 2D (plan-view) adjacency: two panels are snapped/densified when
-            # they overlap in XY regardless of their elevation. Matters for
-            # roofs where a low patio abuts a tall main roof.
-            log.info("=== corner snapping (XY, tol=%.3f m) ===", args.snap_tol)
-            polygons = snap_shared_corners_xy(polygons, planes, tol=args.snap_tol)
-            log.info("=== edge densification (XY, tol=%.3f m) ===", args.snap_tol * 0.6)
-            polygons = densify_shared_edges_xy(polygons, planes, tol=args.snap_tol * 0.6)
-        else:
-            log.info("=== edge snapping (tol=%.3f m) ===", args.snap_tol)
-            polygons = snap_shared_edges(polygons, tol=args.snap_tol)
-
-    log.info("=== mesh ===")
-    mesh = build_roof_mesh(polygons, planes)
-    paths = export_mesh(mesh, args.out_dir)
-
-    log.info("=== cut sheets ===")
-    pdf_path = write_cutsheets_pdf(
-        polygons, planes, mesh, args.out_dir / "cutsheets.pdf",
-    )
-
-    log.info("=== TS exporter JSON ===")
-    json_path = write_ts_json(
-        polygons, planes, mesh, args.out_dir / "cutsheets.ts.json",
-    )
-
-    log.info("=== TS-render PDF (mirrors browser output) ===")
-    ts_pdf_path = render_pdf_from_json(
-        json_path, args.out_dir / "cutsheets.ts.pdf",
-    )
-
-    log.info("=== shop drawings PDF (Integrity-Metals format) ===")
-    project_meta = {
-        "estimate_number": args.estimate_number or args.dsm.stem,
-        "project_name": args.project_name,
-        "project_address": args.project_address,
-    }
-    roof_dict = roof_dict_from_pipeline(
-        polygons, planes, project_meta,
-        coverage_width_in=args.coverage_in,
-        waste_pct=args.waste_pct,
+    paths = run_pipeline(
+        dsm, mask, res_m, args.out_dir,
+        snap_tol=args.snap_tol,
+        use_snap_v2=args.snap_v2,
+        no_clicks=args.no_clicks,
+        panels_json_path=panels_json_path,
+        project_name=args.project_name,
+        project_address=args.project_address,
+        estimate_number=args.estimate_number or args.dsm.stem,
+        coverage_in=args.coverage_in,
         profile=args.profile,
+        waste_pct=args.waste_pct,
     )
-    shop_pdf_path = generate_shop_drawings(
-        roof_dict, args.out_dir / "shop_drawings.pdf",
-    )
-
-    log.info("DONE  obj=%s  gltf=%s  pdf=%s  json=%s  ts_pdf=%s  shop_pdf=%s",
-             paths["obj"], paths["gltf"], pdf_path, json_path,
-             ts_pdf_path, shop_pdf_path)
 
 
 if __name__ == "__main__":
