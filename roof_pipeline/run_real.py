@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +27,8 @@ from .snapping import (
 from .ts_export import write_ts_json
 from .ts_render_pdf import render_pdf_from_json
 from .shop_drawings import generate_shop_drawings, roof_dict_from_pipeline
+from .panel_snap_v2 import snap_polygons as snap_v2
+from .panel_snap_v2.graph import build_feature_graph, print_dryrun
 
 log = logging.getLogger("roof_pipeline.real")
 
@@ -61,6 +64,8 @@ def main():
     ap.add_argument("--coverage-in", type=float, default=24.0)
     ap.add_argument("--profile", default="SV")
     ap.add_argument("--waste-pct", type=float, default=11.0)
+    ap.add_argument("--snap-v2-dryrun", action="store_true",
+                    help="print snap-v2 feature graph as JSON and exit")
     args = ap.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -82,6 +87,18 @@ def main():
 
     log.info("=== plane fits ===")
     planes = fit_all_panels(dsm, mask, res_m)
+
+    if args.snap_v2_dryrun:
+        log.info("=== snap-v2 dry-run ===")
+        # Build polygons from clicks or contours (same as production path)
+        panels_json = args.mask.with_suffix(".json")
+        if panels_json.exists() and not args.no_clicks:
+            polygons = polygons_from_clicks(panels_json, dsm, res_m, planes)
+        else:
+            polygons = extract_panel_polygons(mask, dsm, res_m, planes)
+        graph = build_feature_graph(polygons, planes, tol=args.snap_tol)
+        print_dryrun(graph)
+        sys.exit(0)
 
     # Prefer the click-coords path -- exactly N vertices, straight edges.
     panels_json = args.mask.with_suffix(".json")
