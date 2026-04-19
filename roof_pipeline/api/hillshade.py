@@ -73,8 +73,9 @@ def _render_hillshade(dsm: np.ndarray, azimuth: float = 315, altitude: float = 4
 def _render_heatmap(dsm: np.ndarray) -> np.ndarray:
     """Render DSM elevation as RGBA heatmap. Returns (H, W, 4) uint8.
 
-    Uses 15th-85th percentile normalization to focus the color gradient
-    on roof elevations instead of stretching from ground to treetops.
+    Uses 2nd-98th percentile to clip extreme outliers (deep ground, tall trees)
+    while preserving full roof detail. Uses 'turbo' colormap for clear
+    low-to-high color distinction on roofs.
     """
     import matplotlib
 
@@ -84,8 +85,8 @@ def _render_heatmap(dsm: np.ndarray) -> np.ndarray:
     arr = dsm.copy().astype(np.float64)
     valid = arr[~np.isnan(arr)]
     if valid.size > 0:
-        vmin = np.percentile(valid, 15)
-        vmax = np.percentile(valid, 85)
+        vmin = np.percentile(valid, 2)
+        vmax = np.percentile(valid, 98)
         if vmax <= vmin:
             vmin, vmax = np.nanmin(valid), np.nanmax(valid)
         arr = np.clip(arr, vmin, vmax)
@@ -94,7 +95,7 @@ def _render_heatmap(dsm: np.ndarray) -> np.ndarray:
         arr[:] = 0.0
 
     arr = np.nan_to_num(arr, nan=0.0)
-    colored = cm.inferno(arr)  # returns (H, W, 4) float [0,1]
+    colored = cm.turbo(arr)  # blue(low) -> green -> yellow -> red(high)
     return (colored * 255).astype(np.uint8)
 
 
