@@ -40,6 +40,9 @@ export default function LabelingPage({
 
   // Load saved labels on mount
   useEffect(() => {
+    // Clear previous sample's data before loading new
+    loadPanels([]);
+
     async function loadLabels() {
       try {
         const data = await getLabels(sampleId);

@@ -14,8 +14,8 @@ import { SnapPreviewLayer } from "./SnapPreviewLayer";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
-const MAGNET_RADIUS_PX = 5;
-const AUTOCLOSE_RADIUS_PX = 5;
+const MAGNET_RADIUS_PX = 3;
+const AUTOCLOSE_RADIUS_PX = 3;
 const SCALE_BY = 1.05;
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 10;
