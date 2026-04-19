@@ -86,6 +86,15 @@ def densify_edges(
     # ------------------------------------------------------------------
     out = {pid: poly.copy() for pid, poly in polygons.items()}
 
+    # Snapshot source vertices before any mutations.  Densify inserts
+    # vertices from a *source* panel into a *target* panel's edges.
+    # Without the snapshot, a panel that participates in 2+ graph edges
+    # accumulates spurious inserted vertices: edge (A,P) inserts into P,
+    # then edge (B,P) uses the already-enlarged P as source, projecting
+    # those spurious vertices back onto B's edges.  Using the pre-densify
+    # snapshot for source lookups breaks this mutation chain.
+    source_snapshot = {pid: poly.copy() for pid, poly in out.items()}
+
     insert_count = 0
     edge_count = 0
 
@@ -111,7 +120,7 @@ def densify_edges(
         for target_pid, source_pid in [(pid_a, pid_b), (pid_b, pid_a)]:
             target_plane = planes.get(target_pid)
             target_poly = out[target_pid]
-            source_poly = out[source_pid]
+            source_poly = source_snapshot[source_pid]
 
             n = target_poly.shape[0]
             new_verts: list[np.ndarray] = []
