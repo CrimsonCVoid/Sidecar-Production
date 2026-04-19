@@ -73,21 +73,22 @@ class TestSharedEdgeDensification:
 
     def test_insertions_sorted_by_t(self):
         """Two extra mid-edge vertices. After densify, insertions are sorted by t."""
-        # Panel 1: rectangle with no extra vertices
+        # Panel 1: rectangle with long shared edge (0 to 10) -- extra vertices
+        # at x=3 and x=7 are well outside tol=1.0 from endpoints
         poly1 = np.array([
             [0.0, 0.0, 5.0],
-            [4.0, 0.0, 5.0],
-            [4.0, 2.0, 5.0],
+            [10.0, 0.0, 5.0],
+            [10.0, 2.0, 5.0],
             [0.0, 2.0, 5.0],
         ])
-        # Panel 2: has two extra vertices at (1,0,5) and (3,0,5) on shared edge
+        # Panel 2: has two extra vertices at (3,0,5) and (7,0,5) on shared edge
         poly2 = np.array([
             [0.0, 0.0, 5.0],
             [0.0, -2.0, 5.0],
-            [4.0, -2.0, 5.0],
-            [4.0, 0.0, 5.0],
+            [10.0, -2.0, 5.0],
+            [10.0, 0.0, 5.0],
+            [7.0, 0.0, 5.0],
             [3.0, 0.0, 5.0],
-            [1.0, 0.0, 5.0],
         ])
 
         plane = _make_plane()
@@ -103,7 +104,7 @@ class TestSharedEdgeDensification:
             [float(v[0]) for v in r1 if abs(v[1]) < 0.01],
         )
 
-        # Should have 0, 1, 3, 4 (endpoints + two insertions)
+        # Should have 0, 3, 7, 10 (endpoints + two insertions)
         assert len(shared_xs) >= 4, (
             f"Panel 1 should have >= 4 vertices on shared edge, got {shared_xs}"
         )
