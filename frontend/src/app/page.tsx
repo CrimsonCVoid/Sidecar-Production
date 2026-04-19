@@ -3,7 +3,7 @@
 import useSWR from "swr";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { FileText, ArrowRight } from "lucide-react";
+import { ArrowRight, Tag } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -12,10 +12,9 @@ interface Sample {
   address: string;
   panel_count: number;
   latest_run_status: string | null;
-  latest_run_progress: number | null;
-  latest_run_started: string | null;
-  latest_run_completed: string | null;
-  pdf_path: string | null;
+  label_status: string;
+  has_labels: boolean;
+  dsm_storage_path: string | null;
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -25,10 +24,12 @@ function StatusBadge({ status }: { status: string | null }) {
     return <Badge variant="outline" className="text-zinc-500">No runs</Badge>;
   }
   const map: Record<string, { className: string; label: string }> = {
-    queued: { className: "bg-zinc-700 text-zinc-200", label: "Queued" },
-    running: { className: "bg-yellow-900 text-yellow-300", label: "Running" },
-    done: { className: "bg-green-900 text-green-300", label: "Complete" },
-    error: { className: "bg-red-900 text-red-300", label: "Failed" },
+    pending: { className: "bg-zinc-700 text-zinc-200", label: "Pending" },
+    building: { className: "bg-yellow-900 text-yellow-300", label: "Building" },
+    complete: { className: "bg-green-900 text-green-300", label: "Complete" },
+    failed: { className: "bg-red-900 text-red-300", label: "Failed" },
+    flagged: { className: "bg-orange-900 text-orange-300", label: "Flagged" },
+    accepted: { className: "bg-emerald-900 text-emerald-300", label: "Accepted" },
   };
   const s = map[status] ?? { className: "bg-zinc-700 text-zinc-200", label: status };
   return <Badge className={s.className}>{s.label}</Badge>;
@@ -79,7 +80,10 @@ export default function DashboardPage() {
                     Panels
                   </th>
                   <th className="text-left px-4 py-3 text-sm font-medium text-zinc-400">
-                    Status
+                    Build Status
+                  </th>
+                  <th className="text-left px-4 py-3 text-sm font-medium text-zinc-400">
+                    Labels
                   </th>
                   <th className="text-right px-4 py-3 text-sm font-medium text-zinc-400">
                     Actions
@@ -101,19 +105,17 @@ export default function DashboardPage() {
                     <td className="px-4 py-3">
                       <StatusBadge status={sample.latest_run_status} />
                     </td>
+                    <td className="px-4 py-3">
+                      {sample.has_labels ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-emerald-400">
+                          <Tag className="w-3 h-3" /> {sample.label_status}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-zinc-500">unlabeled</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        {sample.pdf_path && (
-                          <a
-                            href={`${API_BASE}/storage/v1/object/public/${sample.pdf_path}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-zinc-400 hover:text-white transition-colors"
-                            title="View PDF"
-                          >
-                            <FileText className="w-4 h-4" />
-                          </a>
-                        )}
                         <Link
                           href={`/labeling/${sample.id}`}
                           className="text-zinc-400 hover:text-white transition-colors"

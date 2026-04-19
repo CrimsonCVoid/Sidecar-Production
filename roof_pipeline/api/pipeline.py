@@ -106,10 +106,10 @@ async def _run_pipeline_bg(
         _update_status(supabase, run_id, status="running", stage_name="loading", progress_pct=5)
 
         # Load DSM and mask from Supabase Storage
-        # For MVP: load sample metadata from Supabase to get file paths
-        sample_result = supabase.table("samples").select("*").eq("id", sample_id).execute()
+        # Real table is training_samples (not "samples")
+        sample_result = supabase.table("training_samples").select("*").eq("id", sample_id).execute()
         if not sample_result.data:
-            raise ValueError(f"Sample {sample_id} not found in samples table")
+            raise ValueError(f"Sample {sample_id} not found in training_samples table")
 
         sample = sample_result.data[0]
 
@@ -118,17 +118,17 @@ async def _run_pipeline_bg(
             tmp_path = Path(tmp_dir)
 
             # Download DSM .tif
-            dsm_storage_path = sample.get("dsm_path")
+            dsm_storage_path = sample.get("dsm_storage_path")
             if not dsm_storage_path:
-                raise ValueError(f"Sample {sample_id} has no dsm_path")
+                raise ValueError(f"Sample {sample_id} has no dsm_storage_path")
             dsm_bytes = supabase.storage.from_(settings.storage_bucket).download(dsm_storage_path)
             dsm_local = tmp_path / "dsm.tif"
             dsm_local.write_bytes(dsm_bytes)
 
             # Download mask .npy
-            mask_storage_path = sample.get("mask_path")
+            mask_storage_path = sample.get("mask_storage_path")
             if not mask_storage_path:
-                raise ValueError(f"Sample {sample_id} has no mask_path")
+                raise ValueError(f"Sample {sample_id} has no mask_storage_path")
             mask_bytes = supabase.storage.from_(settings.storage_bucket).download(mask_storage_path)
             mask_local = tmp_path / "mask.npy"
             mask_local.write_bytes(mask_bytes)
@@ -238,36 +238,48 @@ async def list_samples(request: Request):
 
     supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
 
-    samples_result = supabase.table("samples").select("*").execute()
-    samples = samples_result.data or []
-
-    # Fetch latest run per sample in one query, ordered by started_at desc
-    runs_result = (
-        supabase.table("pipeline_runs")
-        .select("sample_id, status, progress_pct, started_at, completed_at, output_paths")
-        .order("started_at", desc=True)
+    # Real table is training_samples, not "samples"
+    samples_result = (
+        supabase.table("training_samples")
+        .select("id, formatted_address, source_address, width_px, height_px, dsm_storage_path, created_at")
+        .order("created_at", desc=True)
         .execute()
     )
-    # Build map of sample_id -> latest run (first occurrence wins due to desc order)
-    latest_runs: dict[str, dict] = {}
-    for run in runs_result.data or []:
-        sid = run["sample_id"]
-        if sid not in latest_runs:
-            latest_runs[sid] = run
+    samples = samples_result.data or []
+
+    # auto_built_roofs has region_count and label_status per sample
+    roofs_result = (
+        supabase.table("auto_built_roofs")
+        .select("sample_id, status, region_count, label_status")
+        .execute()
+    )
+    roofs_by_sample: dict[str, dict] = {}
+    for r in roofs_result.data or []:
+        roofs_by_sample[r["sample_id"]] = r
+
+    # training_labels for label count
+    labels_result = (
+        supabase.table("training_labels")
+        .select("sample_id, status")
+        .execute()
+    )
+    labels_by_sample: dict[str, dict] = {}
+    for lb in labels_result.data or []:
+        labels_by_sample[lb["sample_id"]] = lb
 
     result = []
     for s in samples:
         sid = s["id"]
-        run = latest_runs.get(sid)
+        roof = roofs_by_sample.get(sid)
+        label = labels_by_sample.get(sid)
         result.append({
             "id": sid,
-            "address": s.get("address", sid),
-            "panel_count": s.get("panel_count", 0),
-            "latest_run_status": run["status"] if run else None,
-            "latest_run_progress": run.get("progress_pct", 0) if run else None,
-            "latest_run_started": run.get("started_at") if run else None,
-            "latest_run_completed": run.get("completed_at") if run else None,
-            "pdf_path": (run.get("output_paths") or {}).get("cutsheets_pdf") if run else None,
+            "address": s.get("formatted_address") or s.get("source_address") or sid,
+            "panel_count": roof.get("region_count", 0) if roof else 0,
+            "latest_run_status": roof["status"] if roof else None,
+            "label_status": roof.get("label_status", "unlabeled") if roof else "unlabeled",
+            "has_labels": label is not None,
+            "dsm_storage_path": s.get("dsm_storage_path"),
         })
 
     return result
