@@ -369,7 +369,7 @@ async def generate_pdf(
     Reads panel labels from training_labels, downloads DSM from storage,
     runs the pipeline synchronously, and returns the PDF file.
     """
-    from fastapi.responses import FileResponse
+    from fastapi.responses import Response
     from io import BytesIO
 
     request.state.sample_id = sample_id
@@ -478,8 +478,14 @@ async def generate_pdf(
         if pdf_path is None or not pdf_path.exists():
             raise HTTPException(status_code=500, detail="Pipeline ran but no PDF was generated")
 
-        return FileResponse(
-            path=str(pdf_path),
-            media_type="application/pdf",
-            filename=f"{sample_id[:8]}_cutsheets.pdf",
-        )
+        # Read PDF bytes before temp dir is cleaned up (FileResponse is lazy)
+        pdf_bytes = pdf_path.read_bytes()
+
+    # Return outside the tempdir context so cleanup has already happened
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{sample_id[:8]}_cutsheets.pdf"',
+        },
+    )
