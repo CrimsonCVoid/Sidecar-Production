@@ -31,8 +31,8 @@
   5. `from roof_pipeline.panel_snap_v2 import snap_polygons` imports without error and the public signature matches `snap_shared_edges` (same argument and return types)
 **Plans:** 3 plans
 Plans:
-- [ ] 01-01-PLAN.md -- Winding normalization module + TDD test suite (TEST-07)
-- [ ] 01-02-PLAN.md -- Three-pass clustering module + TDD test suite (TEST-04)
+- [x] 01-01-PLAN.md -- Winding normalization module + TDD test suite (TEST-07)
+- [x] 01-02-PLAN.md -- Three-pass clustering module + TDD test suite (TEST-04)
 - [ ] 01-03-PLAN.md -- Feature graph, public API, --snap-v2-dryrun integration (TEST-05)
 
 ### Phase 2: Apex Solver + Integration
@@ -53,7 +53,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Feature Graph + Clustering | 0/3 | Planned | - |
+| 1. Feature Graph + Clustering | 2/3 | In Progress | - |
 | 2. Apex Solver + Integration | 0/? | Not started | - |
 
 ---
