@@ -26,5 +26,7 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_anon_key: str
     supabase_service_role_key: str
+    google_solar_api_key: str = ""
     cors_origins: list[str] = ["http://localhost:3000"]
     storage_bucket: str = "pipeline-outputs"
+    training_bucket: str = "training-data"

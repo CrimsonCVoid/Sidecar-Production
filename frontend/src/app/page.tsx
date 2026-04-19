@@ -1,9 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/badge";
-import { ArrowRight, Tag } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { ArrowRight, Tag, Loader2, MapPin } from "lucide-react";
+import { toast } from "sonner";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -21,7 +25,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
 function StatusBadge({ status }: { status: string | null }) {
   if (!status) {
-    return <Badge variant="outline" className="text-zinc-500">No runs</Badge>;
+    return <Badge variant="outline" className="text-zinc-500">New</Badge>;
   }
   const map: Record<string, { className: string; label: string }> = {
     pending: { className: "bg-zinc-700 text-zinc-200", label: "Pending" },
@@ -35,8 +39,73 @@ function StatusBadge({ status }: { status: string | null }) {
   return <Badge className={s.className}>{s.label}</Badge>;
 }
 
+function AddressInput({ onSuccess }: { onSuccess: () => void }) {
+  const router = useRouter();
+  const [address, setAddress] = useState("");
+  const [isIngesting, setIsIngesting] = useState(false);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!address.trim()) return;
+
+    setIsIngesting(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/solar/ingest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: address.trim() }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || err.message || "Ingest failed");
+      }
+
+      const data = await res.json();
+      toast.success(`Downloaded solar data for ${data.formatted_address}`);
+      setAddress("");
+      onSuccess();
+      router.push(`/labeling/${data.sample_id}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to ingest address");
+    } finally {
+      setIsIngesting(false);
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="flex gap-2 mb-6">
+      <div className="relative flex-1">
+        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+        <input
+          type="text"
+          value={address}
+          onChange={(e) => setAddress(e.target.value)}
+          placeholder="Enter address to analyze (e.g. 123 Main St, Austin TX)"
+          className="w-full pl-10 pr-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-lg text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600 transition-colors"
+          disabled={isIngesting}
+        />
+      </div>
+      <Button
+        type="submit"
+        disabled={isIngesting || !address.trim()}
+        className="px-6"
+      >
+        {isIngesting ? (
+          <>
+            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            Downloading...
+          </>
+        ) : (
+          "Analyze"
+        )}
+      </Button>
+    </form>
+  );
+}
+
 export default function DashboardPage() {
-  const { data: samples, error, isLoading } = useSWR<Sample[]>(
+  const { data: samples, error, isLoading, mutate } = useSWR<Sample[]>(
     `${API_BASE}/api/pipeline/samples`,
     fetcher,
     { refreshInterval: 3000 },
@@ -50,6 +119,8 @@ export default function DashboardPage() {
         </h1>
         <p className="text-zinc-400 mb-6">Roof samples dashboard</p>
 
+        <AddressInput onSuccess={() => mutate()} />
+
         {isLoading && (
           <div className="text-zinc-500 py-12 text-center">
             Loading samples...
@@ -62,9 +133,9 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {samples && samples.length === 0 && (
+        {samples && samples.length === 0 && !isLoading && (
           <div className="text-zinc-500 py-12 text-center">
-            No samples found. Create samples in Supabase to get started.
+            No samples yet. Enter an address above to get started.
           </div>
         )}
 
