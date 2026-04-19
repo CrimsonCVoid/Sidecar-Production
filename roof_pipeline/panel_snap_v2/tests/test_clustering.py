@@ -26,23 +26,11 @@ class TestTransitiveCluster:
         """Three points at pairwise distances (0.9, 0.9, 1.3) with tol=1.0 cluster."""
         # Panel 1: single vertex at A=(0, 0, 5)
         # Panel 2: single vertex at B=(0.9, 0, 5)
-        # Panel 3: single vertex at C=(0.45, 1.22, 5)
-        # dist(A,B) = 0.9, dist(A,C) ~= 1.3, dist(B,C) ~= 0.9 (approx)
-        # Actually: let's use exact geometry.
-        # A = (0, 0, 5), B = (0.9, 0, 5), C = (1.3, 0, 5)
-        # dist(A,B)=0.9, dist(B,C)=0.4, dist(A,C)=1.3
-        # Wait -- we need dist(B,C)=0.9 too. Use:
-        # A=(0,0,5), B=(0.9,0,5), C=(0.45, 0.9*sin(60), 5) ≈ (0.45, 0.779, 5)
-        # dist(A,B)=0.9
-        # dist(A,C)=sqrt(0.45^2+0.779^2)=sqrt(0.2025+0.607)=sqrt(0.809)=0.899... too close
-        # Use explicit coords: A=(0,0,5), B=(0.9,0,5), C=(1.3,0,5)
-        # dist(A,B)=0.9, dist(B,C)=0.4, dist(A,C)=1.3
-        # But test says (0.9, 0.9, 1.3). Use:
-        # A=(0,0,5), B=(0.9,0,5)  -- dist(A,B)=0.9
+        # Panel 3: single vertex at C
         # C needs dist(B,C)=0.9, dist(A,C)=1.3
         # C=(x,y,5): x^2+y^2=1.69, (x-0.9)^2+y^2=0.81
-        # x^2+y^2=1.69, x^2-1.8x+0.81+y^2=0.81 => 1.69-1.8x=0 => x=1.69/1.8≈0.9389
-        # y^2=1.69-0.882=0.808 => y≈0.8989
+        # x^2+y^2=1.69, x^2-1.8x+0.81+y^2=0.81 => 1.69-1.8x=0 => x=1.69/1.8
+        # y^2=1.69-x^2
         A = np.array([[0.0, 0.0, 5.0]])
         B = np.array([[0.9, 0.0, 5.0]])
         cx = 1.69 / 1.8  # ~0.9389
