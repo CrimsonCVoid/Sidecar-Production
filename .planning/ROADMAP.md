@@ -53,7 +53,7 @@ Plans:
 **Milestone Goal:** Fix real-data bugs blocking production use, expose snap engine via FastAPI, and build the Next.js labeling dashboard with shared-node magnet, undo/redo, snap preview, plus a dashboard index with sample table, diff viewer, and run monitor.
 
 - [x] **Phase 3: Bug Fixes** - Fix densify area-loss bug and labeler duplicate-corner dedup so the engine is production-safe before API exposure (completed 2026-04-19)
-- [ ] **Phase 4: FastAPI Sidecar** - Snap-preview endpoint, pipeline-run trigger, label persistence, and structured server-side logging on existing DigitalOcean droplet
+- [x] **Phase 4: FastAPI Sidecar** - Snap-preview endpoint, pipeline-run trigger, label persistence, and structured server-side logging on existing DigitalOcean droplet (completed 2026-04-19)
 - [ ] **Phase 5: Labeling Dashboard** - Next.js Konva canvas with shared-node magnet, undo/redo, snap preview overlay, auto-close, mask.json output, browser-side error capture, and Playwright E2E tests for labeler flows
 - [ ] **Phase 6: Dashboard Index + Monitoring** - Sample table, filter chips, diff viewer, Supabase Realtime run monitor, and Playwright E2E tests for dashboard flows
 
@@ -90,7 +90,7 @@ Plans:
 - [x] 04-01-PLAN.md -- API skeleton: config, deps, middleware, schemas, app factory, stub routers (OBSERVABILITY-01a)
 - [x] 04-02-PLAN.md -- run_real.py refactor: extract run_pipeline() callable (API-02 prerequisite)
 - [x] 04-03-PLAN.md -- Snap preview endpoint + test infrastructure (API-01, OBSERVABILITY-01a)
-- [ ] 04-04-PLAN.md -- Pipeline run + labels endpoints + tests (API-02, API-03)
+- [x] 04-04-PLAN.md -- Pipeline run + labels endpoints + tests (API-02, API-03)
 
 ### Phase 5: Labeling Dashboard
 **Goal**: Users can draw, edit, and preview panel polygons on a hillshade canvas with shared-node snapping that eliminates ridge drift at the source, with browser-side error capture and Playwright E2E tests for labeler flows
@@ -129,7 +129,7 @@ Plans:
 | 1. Feature Graph + Clustering | v1.0 | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
-| 4. FastAPI Sidecar | v2.0 | 3/4 | In Progress | - |
+| 4. FastAPI Sidecar | v2.0 | 4/4 | Complete | 2026-04-19 |
 | 5. Labeling Dashboard | v2.0 | 0/? | Not started | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 
