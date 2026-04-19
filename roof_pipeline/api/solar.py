@@ -87,8 +87,13 @@ def _get_data_layers(lat: float, lng: float, api_key: str) -> dict:
 
 
 def _download_geotiff(url: str, api_key: str) -> bytes:
-    """Download a GeoTIFF from a Solar API URL."""
-    r = httpx.get(url, params={"key": api_key}, timeout=60)
+    """Download a GeoTIFF from a Solar API URL.
+
+    The URL already contains ?id=... from the dataLayers response.
+    Append the API key with & to preserve existing query params.
+    """
+    sep = "&" if "?" in url else "?"
+    r = httpx.get(f"{url}{sep}key={api_key}", timeout=60)
     r.raise_for_status()
     return r.content
 
