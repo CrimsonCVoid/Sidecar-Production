@@ -1,8 +1,8 @@
-# Topology-Aware Snap + Web Labeling Dashboard
+# Topology-Aware Snap Engine (Milestone 1 of 2)
 
 ## What This Is
 
-A correctness-focused upgrade to the roof_pipeline snapping engine and a production labeling dashboard for My Metal Roofer. The current pairwise edge snap in `snapping.py` cannot handle 3+ panels meeting at hip/ridge apices, producing slivers and gaps in the mesh. This milestone replaces it with a topology-aware snap engine (`panel_snap_v2`) that mesh-weld-snaps ridges and hip apices geometrically, and wires it into a Next.js labeling dashboard with shared-node magnets, undo, snap preview, run monitoring, and diff viewing.
+A correctness-focused upgrade to the roof_pipeline snapping engine. The current pairwise edge snap in `snapping.py` cannot handle 3+ panels meeting at hip/ridge apices, producing slivers and gaps in the mesh. This milestone replaces it with a topology-aware snap engine (`panel_snap_v2`) that mesh-weld-snaps ridges and hip apices geometrically, and wires it into `run_real.py` behind a `--snap-v2` flag. A follow-up milestone (Milestone 2) covers the FastAPI snap-preview endpoint, Next.js labeling dashboard, and monitoring/diff viewer.
 
 ## Core Value
 
@@ -34,18 +34,17 @@ Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-
 - [ ] `--snap-v2` flag in `run_real.py` routing to new engine
 - [ ] `snap_v2_features.json` sidecar output (feature graph + edges)
 - [ ] 7 specific tests proving correctness (gable unchanged, hip apex weld, ridge weld, transitive cluster, mixed winding, self-intersecting repair, L-shaped winding)
-- [ ] FastAPI snap-preview endpoint on existing DigitalOcean droplet
-- [ ] Next.js labeling dashboard (`/labeling/[sampleId]`) with Konva canvas, Zustand state, shared-node magnet, undo/redo
-- [ ] Shared-node magnet UX: 12px snap radius, shift-click override, visual label ("-> P3.C1")
-- [ ] Snap preview mode rendering feature graph with valence-colored dots
-- [ ] Comprehensive dashboard (`/labeling` index): sample table, filter chips, feature graph expand, PDF preview, diff viewer, run monitor via Supabase Realtime
-
 ### Out of Scope
 
-- Edge semantic classification (ridge/hip/valley/eave/rake tagging) — next milestone
-- Penetration labeling (chimneys, skylights, vents) — next milestone
+- FastAPI snap-preview endpoint — Milestone 2
+- Next.js labeling dashboard (`/labeling/[sampleId]`) — Milestone 2
+- Shared-node magnet UX — Milestone 2
+- Snap preview mode — Milestone 2
+- Comprehensive dashboard (index + monitor + diff viewer) — Milestone 2
+- Edge semantic classification (ridge/hip/valley/eave/rake tagging) — future milestone
+- Penetration labeling (chimneys, skylights, vents) — future milestone
 - Face-segmentation NN training target — way later
-- Multi-user concurrent editing — complexity not justified for v1
+- Multi-user concurrent editing — complexity not justified
 - Removing the matplotlib labeler — kept as CLI fallback
 - shop_drawings.py subpackage extraction — flagged by mapper as 2089 lines but deferred; do not plan refactor work this milestone
 
@@ -72,8 +71,9 @@ Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-
 | Replace snap, don't delete `snapping.py` | `--snap-v2` flag keeps old path as fallback until validation passes | -- Pending |
 | Union-find with 3-pass expanding tolerance | Transitive hip apex grouping where no single pair is within tol | -- Pending |
 | Least-squares plane intersection for valence-3+ | Closed-form 3x3 for 3 planes, lstsq for 4+. Prior art: Kelly & Wonka 2011, Ren et al. SGA21 | -- Pending |
-| Shared-node magnet in UI (12px snap radius) | Eliminates 3-8px ridge pair drift at the source instead of correcting downstream | -- Pending |
+| Shared-node magnet in UI (12px snap radius) | Eliminates 3-8px ridge pair drift at the source instead of correcting downstream | -- Milestone 2 |
 | Keep matplotlib labeler as CLI fallback | Production use moves to dashboard, but CLI fallback useful for dev/debug | -- Pending |
+| Split into 2 milestones | Max plan quota — snap engine first, dashboard second. No descope, just sequencing. | -- Decided |
 | Pydantic/dataclass schema at `polygons_from_clicks` boundary | New dashboard writes to this contract over HTTP — now a security surface | -- Pending |
 
 ## Highest-Risk Item
@@ -84,13 +84,12 @@ Winding normalization on non-convex (L-shaped) panels. Shoelace-signed-area says
 
 Prior art on multi-plane apex solving: Kelly & Wonka 2011, Ren et al. SGA21 (`llorz/SGA21_roofOptimization`), PolyFit / CGAL roof pipelines. Not for reimplementation — steal residual weighting choices in their LS solvers.
 
-## Definition of Done
+## Definition of Done (Milestone 1)
 
-1. `pytest roof_pipeline/panel_snap_v2_test.py` green
+1. `pytest roof_pipeline/panel_snap_v2_test.py` green (all 7 tests)
 2. `run_real.py --snap-v2 <hip_roof_sample>` produces a PDF with zero visible slivers at the hip apex
-3. Next.js labeler loads a DSM, labels a 4-panel hip roof end-to-end with shared-node magnets working, writes mask.json that `run_real.py --snap-v2` consumes without error
-4. Dashboard shows the sample with "v2-verified / clean" badge
-5. Second run with one corner moved renders a diff showing exactly which edge changed
+3. `snap_v2_features.json` sidecar output contains correct feature graph with valence classifications
+4. Gable-roof smoke test produces byte-identical output to v1 snap
 
 ## Evolution
 
