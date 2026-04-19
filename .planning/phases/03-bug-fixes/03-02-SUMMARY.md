@@ -1,19 +1,20 @@
 ---
 phase: 03-bug-fixes
 plan: 02
-subsystem: panel_snap_v2/densify
-tags: [bugfix, densify, mutation-chain, regression-test, FIX-01, FIX-02]
+subsystem: panel_snap_v2/solver, panel_snap_v2/densify
+tags: [bugfix, solver, displacement-guard, densify, regression-test, FIX-01, FIX-02]
 requirements: [FIX-01, FIX-02]
 
 dependency_graph:
   requires: []
-  provides: [densify-source-snapshot-fix, fb7e705c-regression-test]
+  provides: [solver-displacement-guard, densify-source-snapshot, fb7e705c-regression-test]
   affects: [panel_snap_v2.snap_polygons, run_real.py-snap-v2-path]
 
 tech_stack:
   added: []
   patterns:
-    - Source snapshot pattern for mutation-safe iteration over shared mutable dict
+    - Displacement guard for solver apex solutions (check XY distance from centroid)
+    - Source snapshot pattern for mutation-safe iteration in densify
     - Inline real-data constants for regression tests (D-10)
     - Per-shared-edge DEBUG diagnostic logging (D-05)
 
@@ -22,49 +23,53 @@ key_files:
     - roof_pipeline/panel_snap_v2/tests/test_densify_regression.py
     - .planning/phases/03-bug-fixes/panel8_diagnostic.log
   modified:
+    - roof_pipeline/panel_snap_v2/solver.py
     - roof_pipeline/panel_snap_v2/densify.py
 ---
 
 ## What was done
 
-Fixed the densify mutation-chain bug that caused 65.9% area loss on panel 8 of the fb7e705c 12-panel hip-and-valley roof.
+Fixed the 65.9% area loss on panel 8 of the fb7e705c 12-panel hip-and-valley roof. Two fixes applied: the real root cause in the solver, plus a secondary densify improvement.
 
-### Root cause
+### Root cause (solver — the actual bug)
 
-`densify_edges()` used `source_poly = out[source_pid]` which reads from the mutated `out` dict across graph edge iterations. Panels participating in 2+ graph edges accumulated spurious inserted vertices: edge (A,P) inserts A's vertices into P and updates `out[P]`, then edge (B,P) uses the enlarged `out[P]` as source, projecting those spurious vertices onto B's edges and inserting them back into P again. This mutation chain created self-intersecting geometry.
+The valence-4 hip apex solver (panels [1,2,7,8]) produced an apex position 17m from the input vertices. The 4 plane normals have near-zero Y components (all ±0.05), making the lstsq system poorly constrained in Y. Singular values: [46.5, 27.1, 0.167] — the small third value amplifies noise, producing y=66.5 instead of y≈49.8. The condition number (280) is well below the 1e8 guard, so no fallback triggered.
 
-### Fix
+This catastrophic vertex displacement created a self-intersecting polygon for panel 8 **after the solver, before densify even runs**. Densify inserted 0 vertices into panel 8.
 
-Added a `source_snapshot` dict that captures all polygon vertices BEFORE the edge iteration loop. Source vertex lookups now read from `source_snapshot[source_pid]` instead of `out[source_pid]`, breaking the mutation chain. Target polygon updates still write to `out` (they need the inserted vertices for their own geometry).
+### Fix 1: Solver displacement guard (the real fix)
 
-The fix is narrow (D-06), keeps the same API signature (D-07), adds no fallback path (D-08).
+After computing the apex via lstsq/solve, check the XY displacement from the cluster centroid. If displacement > 5*tol, fall back to the safer XY-centroid + per-plane-Z approach. Applied to both `_solve_valence3` and `_solve_valence4plus`.
+
+### Fix 2: Densify source snapshot (secondary improvement)
+
+Added `source_snapshot` dict in `densify_edges()` so source vertex lookups use pre-densify state. This prevents a real mutation-chain issue (vertices inserted from one edge becoming source candidates for the next), though it was not the cause of the panel 8 failure.
 
 ### Verification
 
-- 3 new regression tests with inline constants from fb7e705c (D-10, FIX-02)
-- Panel 8: 0 vertex growth after densify (was unbounded before fix)
-- All 12 panels survive densify without error
-- Multi-neighbor panels show no mutation-chain contamination
+- `snap_polygons` on fb7e705c with **real DSM** data: SUCCEEDED, all 12 panels survive
+- Displacement guard triggered on 2 clusters: [1,2,7,8] at 17m, [2,4,7] at 125m
+- 3 regression tests with inline fb7e705c constants pass (D-10, FIX-02)
 - All 49 tests pass (46 existing + 3 new regression)
 
 ### Diagnostic evidence
 
-`panel8_diagnostic.log` contains before/after comparison:
-- PRE-FIX: Root cause analysis via code inspection + synthetic plane investigation
-- POST-FIX: Panel 8 vertex count stable (5 before, 5 after), all panels survive
+`panel8_diagnostic.log` contains the full investigation:
+- PRE-FIX: Identified self-intersection at (1.091, 2.606) occurs after solver, not densify
+- Solver diagnostic: vertex [3] moved 16.73m by lstsq due to near-parallel Y normals
+- POST-FIX: snap_polygons succeeds on real data with displacement guard active
 
 ## Self-Check: PASSED
 
+- [x] solver.py contains `_MAX_DISPLACEMENT_TOLS` constant and displacement guard
 - [x] densify.py contains source_snapshot pattern
-- [x] densify.py API signature unchanged (D-07)
+- [x] snap_polygons on fb7e705c real DSM succeeds without RuntimeError
 - [x] test_densify_regression.py contains TestFb7e705cRegression class
-- [x] test_densify_regression.py contains no runtime file paths (D-10)
-- [x] panel8_diagnostic.log contains POST-FIX section
+- [x] panel8_diagnostic.log contains real DSM diagnostic output
 - [x] All 49 tests pass
-- [x] No modifications to STATE.md or ROADMAP.md
 
 ## Deviations
 
-1. **Investigation used code analysis + synthetic planes instead of real DSM run.** The mask.json pixel coordinates were available but no DSM .tif was provided. The root cause was identified through code inspection of the mutation pattern, confirmed by the synthetic plane run showing the mechanism. The real DSM failure mode (65.9% area loss) is documented from the original plan.
+1. **Root cause was in solver, not densify.** The original plan assumed densify was the bug. Real-data investigation with DEBUG logging revealed the solver's lstsq produced a 17m displacement. The densify source_snapshot fix is retained as a valid secondary improvement but was not the cause.
 
-2. **Regression test exercises densify_edges directly, not full snap_polygons.** The full pipeline with synthetic planes hits unrelated area-change thresholds on panels 2-3 due to approximate plane geometry. Testing densify_edges directly isolates the mutation-chain fix cleanly.
+2. **Regression test exercises densify_edges directly, not full snap_polygons.** The full pipeline end-to-end test requires the real DSM file which is not committed. The inline-constant regression test validates the densify mutation-chain fix. The solver displacement guard is validated by running against the real DSM at `/Users/carterbrady/Downloads/`.

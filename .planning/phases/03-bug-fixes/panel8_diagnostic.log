@@ -94,18 +94,44 @@ With real DSM planes: apex moved significantly -> spurious insertions via mutati
 RuntimeError from real run (as reported in plan):
   panel 8: make_valid produced MultiPolygon with largest piece ratio 0.659 < 0.95 -- too much geometry lost
 
---- POST-FIX ---
+--- POST-FIX (densify source_snapshot -- insufficient) ---
 
-Fix applied: added `source_snapshot` dict in densify_edges() that captures all
-polygon vertices BEFORE the edge iteration loop. Source vertex lookups now read
-from `source_snapshot[source_pid]` instead of `out[source_pid]`, breaking the
-mutation chain that caused spurious vertex accumulation on multi-neighbor panels.
+Fix applied: source_snapshot in densify_edges(). This addressed a real
+mutation-chain issue but was NOT the root cause of the 65.9% area loss.
+Densify inserts 0 vertices into panel 8 on real data. The self-intersection
+is identical before and after densify.
 
-Post-fix verification:
-- Panel 8 vertex count: 5 before densify, 5 after (0 growth)
-- All 12 panels survive densify_edges without error
-- All multi-neighbor panels show <= 1 vertex growth (no mutation chain)
-- 49/49 tests pass (3 existing densify + 3 new regression + 43 other)
+--- REAL ROOT CAUSE (solver displacement) ---
 
-The fix is narrow (D-06): only changed how source polygons are looked up.
-API signature unchanged (D-07). No fallback path added (D-08).
+Running with real DSM + LOG_LEVEL=DEBUG revealed:
+
+  panel 8 invalid after solver: Self-intersection[1.09145448364827 2.60565368007058]
+
+The self-intersection occurs AFTER the solver, BEFORE densify. Densify is innocent.
+
+Solver diagnostic for panel 8 vertex [3] (valence-4 hip apex, panels [1,2,7,8]):
+  Pre-solver:  x=49.622714 y=49.837777 z=110.451983
+  Post-solver: x=48.289369 y=66.517036 z=110.899241
+  Displacement: 16.73 m (!)
+
+Why: The 4 plane normals have near-zero Y components (all ±0.05):
+  Panel 1: normal=(-0.563, -0.056, 0.824)
+  Panel 2: normal=(0.563,  0.054, 0.824)
+  Panel 7: normal=(0.567,  0.046, 0.822)
+  Panel 8: normal=(-0.560, -0.056, 0.827)
+
+lstsq singular values: [46.49, 27.08, 0.167]
+The 0.167 makes Y poorly constrained. lstsq produces y=66.5 (17m from centroid).
+Condition number = 280, well below the 1e8 guard -- so no fallback triggered.
+
+Fix: displacement guard in _solve_valence3 and _solve_valence4plus.
+After computing the apex, check XY distance from cluster centroid.
+If displacement > 5*tol, fall back to XY centroid + per-plane Z.
+
+--- POST-FIX (solver displacement guard) ---
+
+snap_polygons on fb7e705c with real DSM: SUCCEEDED, all 12 panels survive.
+Displacement guard triggered on 2 clusters:
+  cluster_id=31 panels=[1,2,7,8] disp=17.0m > max=5.0m -> centroid fallback
+  cluster_id=10 panels=[2,4,7]   disp=125.0m > max=5.0m -> centroid fallback
+49/49 unit tests pass.
