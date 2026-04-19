@@ -72,6 +72,13 @@ export function useKeyboardShortcuts(): void {
         useLabelerStore.getState().setMode("select");
         return;
       }
+
+      // E -> Edit mode (drag vertices, insert midpoints)
+      if (e.key.toLowerCase() === "e" && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        useLabelerStore.getState().setMode("edit");
+        return;
+      }
     }
 
     window.addEventListener("keydown", handleKeyDown);

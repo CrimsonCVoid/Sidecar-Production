@@ -20,16 +20,18 @@ interface LabelerState {
   panels: PanelData[];
   activeDrawing: number[][] | null;
   nextPanelId: number;
-  mode: "draw" | "select";
+  mode: "draw" | "select" | "edit";
   selectedPanelIndex: number | null;
   snapPreview: SnapPreviewData | null;
   isSaving: boolean;
   isLoadingPreview: boolean;
 
   addVertex: (x: number, y: number) => void;
+  insertVertex: (panelIndex: number, edgeIndex: number, x: number, y: number) => void;
+  moveVertex: (panelIndex: number, vertexIndex: number, x: number, y: number) => void;
   closePolygon: () => void;
   deletePanel: (index: number) => void;
-  setMode: (mode: "draw" | "select") => void;
+  setMode: (mode: "draw" | "select" | "edit") => void;
   selectPanel: (index: number | null) => void;
   setSnapPreview: (data: SnapPreviewData | null) => void;
   loadPanels: (panels: PanelData[]) => void;
@@ -51,7 +53,7 @@ export const useLabelerStore = create<LabelerState>()(
       panels: [],
       activeDrawing: null,
       nextPanelId: 0,
-      mode: "draw" as const,
+      mode: "draw" as "draw" | "select" | "edit",
       selectedPanelIndex: null,
       snapPreview: null,
       isSaving: false,
@@ -64,6 +66,29 @@ export const useLabelerStore = create<LabelerState>()(
             : [[x, y]],
           snapPreview: null,
         })),
+
+      insertVertex: (panelIndex: number, edgeIndex: number, x: number, y: number) =>
+        set((state) => {
+          const panels = state.panels.map((p, i) => {
+            if (i !== panelIndex) return p;
+            const newCorners = [...p.corners_pix];
+            newCorners.splice(edgeIndex + 1, 0, [x, y]);
+            return { ...p, corners_pix: newCorners };
+          });
+          return { panels, snapPreview: null };
+        }),
+
+      moveVertex: (panelIndex: number, vertexIndex: number, x: number, y: number) =>
+        set((state) => {
+          const panels = state.panels.map((p, i) => {
+            if (i !== panelIndex) return p;
+            const newCorners = p.corners_pix.map((c, ci) =>
+              ci === vertexIndex ? [x, y] : c,
+            );
+            return { ...p, corners_pix: newCorners };
+          });
+          return { panels, snapPreview: null };
+        }),
 
       closePolygon: () =>
         set((state) => {
@@ -89,7 +114,7 @@ export const useLabelerStore = create<LabelerState>()(
           snapPreview: null,
         })),
 
-      setMode: (mode: "draw" | "select") => set({ mode }),
+      setMode: (mode: "draw" | "select" | "edit") => set({ mode }),
 
       selectPanel: (index: number | null) =>
         set({ selectedPanelIndex: index }),

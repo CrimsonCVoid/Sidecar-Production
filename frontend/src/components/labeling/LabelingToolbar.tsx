@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil, MousePointer2, Undo2, Redo2, Trash2, Zap, Flame } from "lucide-react";
+import { Pencil, MousePointer2, Move, Undo2, Redo2, Trash2, Zap, Flame } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -81,6 +81,24 @@ export function LabelingToolbar({
             }
           />
           <TooltipContent>Select mode (S)</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant={mode === "edit" ? "default" : "ghost"}
+                size="sm"
+                onClick={() => setMode("edit")}
+                className={mode === "edit" ? "bg-amber-500 hover:bg-amber-600" : ""}
+                aria-label="Edit mode"
+              >
+                <Move className="h-4 w-4 mr-1" />
+                Edit
+              </Button>
+            }
+          />
+          <TooltipContent>Edit mode — drag vertices, click edges to add points (E)</TooltipContent>
         </Tooltip>
 
         <Separator orientation="vertical" className="mx-2 h-6" />

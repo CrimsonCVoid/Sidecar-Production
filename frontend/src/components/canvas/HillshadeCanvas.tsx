@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Stage, Layer, Image as KonvaImage } from "react-konva";
 import useImage from "use-image";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -48,8 +48,9 @@ interface HillshadeCanvasProps {
 
 export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: HillshadeCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stageRef = useRef<{ x: () => number; y: () => number; scaleX: () => number; scaleY: () => number; scale: (s: { x: number; y: number }) => void; position: (p: { x: number; y: number }) => void; getPointerPosition: () => { x: number; y: number } | null } | null>(null);
+  const stageRef = useRef<ReturnType<typeof Stage> | null>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
+  const [zoomScale, setZoomScale] = useState(1);
 
   const [cursorPosition, setCursorPosition] = useState<{
     x: number;
@@ -71,6 +72,8 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
   const addVertex = useLabelerStore((s) => s.addVertex);
   const closePolygon = useLabelerStore((s) => s.closePolygon);
   const selectPanel = useLabelerStore((s) => s.selectPanel);
+  const moveVertex = useLabelerStore((s) => s.moveVertex);
+  const insertVertex = useLabelerStore((s) => s.insertVertex);
 
   // Satellite RGB as base layer
   const rgbUrl = `${API_BASE}/api/hillshade/${sampleId}/rgb`;
@@ -84,7 +87,11 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
   const [hasFitImage, setHasFitImage] = useState(false);
   useEffect(() => {
     if (image && !hasFitImage && stageRef.current) {
-      const stage = stageRef.current;
+      const stage = stageRef.current as unknown as {
+        scaleX: () => number;
+        scale: (s: { x: number; y: number }) => void;
+        position: (p: { x: number; y: number }) => void;
+      };
       const scaleX = dimensions.width / image.width;
       const scaleY = dimensions.height / image.height;
       const fitScale = Math.min(scaleX, scaleY) * 0.95;
@@ -92,6 +99,7 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
       const offsetY = (dimensions.height - image.height * fitScale) / 2;
       stage.scale({ x: fitScale, y: fitScale });
       stage.position({ x: offsetX, y: offsetY });
+      setZoomScale(fitScale);
       setHasFitImage(true);
     }
   }, [image, hasFitImage, dimensions]);
@@ -135,12 +143,10 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
 
     setCursorPosition(coords);
 
-    // Update magnet indicator
     if (mode === "draw") {
       const snap = findNearestVertex(coords, panels);
       setMagnetTarget(snap ? { x: snap.vertex[0], y: snap.vertex[1] } : null);
 
-      // Update auto-close indicator
       if (activeDrawing && activeDrawing.length >= 3) {
         const first = activeDrawing[0];
         const dx = coords.x - first[0];
@@ -165,7 +171,7 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
     const coords = getImageCoords(stage);
     if (!coords) return;
 
-    if (mode === "select") {
+    if (mode === "select" || mode === "edit") {
       if (e.target === stage) {
         selectPanel(null);
       }
@@ -177,7 +183,6 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
     let placeX = coords.x;
     let placeY = coords.y;
 
-    // Check auto-close first
     if (activeDrawing && activeDrawing.length >= 3) {
       const first = activeDrawing[0];
       const dx = coords.x - first[0];
@@ -188,7 +193,6 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
       }
     }
 
-    // Check magnet snap
     if (!shiftHeld) {
       const snap = findNearestVertex({ x: coords.x, y: coords.y }, panels);
       if (snap) {
@@ -224,6 +228,7 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
       x: pointer.x - mousePointTo.x * newScale,
       y: pointer.y - mousePointTo.y * newScale,
     });
+    setZoomScale(newScale);
   }
 
   return (
@@ -242,7 +247,7 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
         ref={stageRef as React.RefObject<never>}
         width={dimensions.width}
         height={dimensions.height}
-        draggable={true}
+        draggable={mode !== "edit"}
         onClick={handleStageClick}
         onMouseMove={handleMouseMove}
         onWheel={handleWheel}
@@ -257,20 +262,26 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
             selectedPanelIndex={selectedPanelIndex}
             mode={mode}
             onSelectPanel={selectPanel}
+            onMoveVertex={moveVertex}
+            onInsertVertex={insertVertex}
+            scale={zoomScale}
           />
           <DrawingLayer
             activeDrawing={activeDrawing}
             cursorPosition={cursorPosition}
+            scale={zoomScale}
           />
           <MagnetIndicator
             x={magnetTarget?.x ?? 0}
             y={magnetTarget?.y ?? 0}
             visible={magnetTarget !== null}
+            scale={zoomScale}
           />
           <AutoCloseIndicator
             x={autoCloseTarget?.x ?? 0}
             y={autoCloseTarget?.y ?? 0}
             visible={autoCloseTarget !== null}
+            scale={zoomScale}
           />
           <SnapPreviewLayer />
         </Layer>
