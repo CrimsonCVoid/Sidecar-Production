@@ -23,8 +23,8 @@ Requirements for Milestone 1. Each maps to roadmap phases.
 
 ### Input Validation
 
-- [ ] **VALID-01**: JSON schema validation at `polygons_from_clicks` boundary using Pydantic or dataclass + manual checks — this is now a security surface since the dashboard will write to this contract over HTTP
-- [ ] **VALID-02**: Schema rejects malformed polygon data (missing fields, wrong types, empty vertex arrays) with actionable error messages
+- [x] **VALID-01**: JSON schema validation at `polygons_from_clicks` boundary using Pydantic or dataclass + manual checks — this is now a security surface since the dashboard will write to this contract over HTTP
+- [x] **VALID-02**: Schema rejects malformed polygon data (missing fields, wrong types, empty vertex arrays) with actionable error messages
 
 ### Integration
 
@@ -93,8 +93,8 @@ Deferred to follow-up milestone. Tracked but not in current roadmap.
 | TOPO-09 | Phase 2 | Pending |
 | TOPO-10 | Phase 2 | Pending |
 | TOPO-11 | Phase 1 | Pending |
-| VALID-01 | Phase 2 | Pending |
-| VALID-02 | Phase 2 | Pending |
+| VALID-01 | Phase 2 | Complete (02-02) |
+| VALID-02 | Phase 2 | Complete (02-02) |
 | INTG-01 | Phase 2 | Pending |
 | INTG-02 | Phase 2 | Pending |
 | INTG-03 | Phase 2 | Pending |
@@ -113,4 +113,4 @@ Deferred to follow-up milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-19 after 02-01 execution (TOPO-05..08, TEST-02, TEST-03 complete)*
+*Last updated: 2026-04-19 after 02-02 execution (VALID-01, VALID-02 complete)*
