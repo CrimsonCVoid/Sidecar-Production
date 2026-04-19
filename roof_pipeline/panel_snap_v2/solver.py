@@ -29,6 +29,16 @@ log = logging.getLogger(__name__)
 _COND_WARN = 1e8
 _COND_FAIL = 1e12
 
+# Maximum allowed XY displacement of the solved apex from the cluster
+# centroid, as a multiple of the snap tolerance.  When near-parallel
+# planes make one direction poorly constrained (small singular value),
+# lstsq can produce a solution that is mathematically valid but tens of
+# metres from the input vertices.  The condition number guard doesn't
+# catch this because the system isn't truly singular — just weakly
+# constrained in one axis.  This displacement guard falls back to the
+# safer XY-centroid approach when the apex drifts too far.
+_MAX_DISPLACEMENT_TOLS = 5.0
+
 
 # ---------------------------------------------------------------------------
 # Private helpers
@@ -76,6 +86,7 @@ def _solve_valence3(
     items: list[tuple[int, int, np.ndarray]],
     planes: dict[int, Plane],
     cluster_id: int,
+    tol: float = 1.0,
 ) -> dict[int, np.ndarray]:
     """Resolve a valence-3 cluster: closed-form 3-plane intersection.
 
@@ -112,6 +123,20 @@ def _solve_valence3(
     # Solve 3x3 system
     apex = np.linalg.solve(N, d)
 
+    # Displacement guard (same rationale as valence-4+)
+    xy_centroid = np.mean(
+        [items[m][2][:2] for m in members], axis=0,
+    )
+    displacement_xy = float(np.linalg.norm(apex[:2] - xy_centroid))
+    max_disp = _MAX_DISPLACEMENT_TOLS * max(tol, 0.1)
+    if displacement_xy > max_disp:
+        log.warning(
+            "snap_v2 displacement guard cluster_id=%d panels=%s "
+            "disp=%.3f > max=%.3f -- falling back to centroid",
+            cluster_id, panel_ids, displacement_xy, max_disp,
+        )
+        return _solve_valence2(members, items, planes)
+
     result: dict[int, np.ndarray] = {}
     for m in members:
         result[m] = apex.copy()
@@ -123,6 +148,7 @@ def _solve_valence4plus(
     items: list[tuple[int, int, np.ndarray]],
     planes: dict[int, Plane],
     cluster_id: int,
+    tol: float = 1.0,
 ) -> dict[int, np.ndarray]:
     """Resolve a valence-4+ cluster: weighted least-squares plane intersection.
 
@@ -165,6 +191,26 @@ def _solve_valence4plus(
 
     # Weighted least-squares solve
     apex, _, _, _ = np.linalg.lstsq(N_w, d_w, rcond=None)
+
+    # Displacement guard: if the solved apex is far from the cluster
+    # centroid, the solution is geometrically unreliable (e.g. near-
+    # parallel planes with a small singular value amplifying noise).
+    # Fall back to XY centroid + per-plane Z in that case.
+    xy_centroid = np.mean(
+        [items[m][2][:2] for m in members], axis=0,
+    )
+    displacement_xy = float(np.linalg.norm(apex[:2] - xy_centroid))
+    max_disp = _MAX_DISPLACEMENT_TOLS * max(tol, 0.1)
+    if displacement_xy > max_disp:
+        log.warning(
+            "snap_v2 displacement guard cluster_id=%d panels=%s "
+            "apex_xy=(%.3f, %.3f) centroid_xy=(%.3f, %.3f) "
+            "disp=%.3f > max=%.3f -- falling back to centroid",
+            cluster_id, panel_ids,
+            apex[0], apex[1], xy_centroid[0], xy_centroid[1],
+            displacement_xy, max_disp,
+        )
+        return _solve_valence2(members, items, planes)
 
     result: dict[int, np.ndarray] = {}
     for m in members:
@@ -242,14 +288,14 @@ def solve_apices(
             corner_count += 1
         elif valence == 3:
             try:
-                solved = _solve_valence3(members, items, planes, cluster_id=root)
+                solved = _solve_valence3(members, items, planes, cluster_id=root, tol=tol)
                 ridge_count += 1
             except RuntimeError:
                 raise
         else:  # valence >= 4
             try:
                 solved = _solve_valence4plus(
-                    members, items, planes, cluster_id=root,
+                    members, items, planes, cluster_id=root, tol=tol,
                 )
                 hip_count += 1
             except RuntimeError:
