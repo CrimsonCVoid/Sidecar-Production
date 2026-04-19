@@ -93,3 +93,19 @@ With real DSM planes: apex moved significantly -> spurious insertions via mutati
 
 RuntimeError from real run (as reported in plan):
   panel 8: make_valid produced MultiPolygon with largest piece ratio 0.659 < 0.95 -- too much geometry lost
+
+--- POST-FIX ---
+
+Fix applied: added `source_snapshot` dict in densify_edges() that captures all
+polygon vertices BEFORE the edge iteration loop. Source vertex lookups now read
+from `source_snapshot[source_pid]` instead of `out[source_pid]`, breaking the
+mutation chain that caused spurious vertex accumulation on multi-neighbor panels.
+
+Post-fix verification:
+- Panel 8 vertex count: 5 before densify, 5 after (0 growth)
+- All 12 panels survive densify_edges without error
+- All multi-neighbor panels show <= 1 vertex growth (no mutation chain)
+- 49/49 tests pass (3 existing densify + 3 new regression + 43 other)
+
+The fix is narrow (D-06): only changed how source polygons are looked up.
+API signature unchanged (D-07). No fallback path added (D-08).
