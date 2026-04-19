@@ -15,3 +15,13 @@ def _make_plane(normal=(0, 0, 1), centroid=(0, 0, 5)):
         n = -n
     c = np.array(centroid, dtype=float)
     return Plane(normal=n, centroid=c, rms_residual=0.01, d=float(n @ c))
+
+
+def pytest_addoption(parser):
+    """Add --regenerate-golden CLI flag (D-11)."""
+    parser.addoption(
+        "--regenerate-golden",
+        action="store_true",
+        default=False,
+        help="regenerate golden files instead of comparing against them",
+    )

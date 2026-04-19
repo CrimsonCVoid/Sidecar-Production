@@ -1,0 +1,72 @@
+{
+  "edges": [
+    {
+      "feature_ids": [
+        0,
+        3
+      ],
+      "panel_a": 1,
+      "panel_b": 2
+    }
+  ],
+  "features": [
+    {
+      "id": 0,
+      "panel_ids": [
+        1,
+        2
+      ],
+      "position_xyz": [
+        1.5000000396378512,
+        7.525252310873395,
+        5.512489358101533
+      ],
+      "valence": 2
+    },
+    {
+      "id": 1,
+      "panel_ids": [
+        1
+      ],
+      "position_xyz": null,
+      "valence": 1
+    },
+    {
+      "id": 2,
+      "panel_ids": [
+        1
+      ],
+      "position_xyz": null,
+      "valence": 1
+    },
+    {
+      "id": 3,
+      "panel_ids": [
+        1,
+        2
+      ],
+      "position_xyz": [
+        1.5000000396378512,
+        7.525252310873395,
+        5.512489358101533
+      ],
+      "valence": 2
+    },
+    {
+      "id": 4,
+      "panel_ids": [
+        2
+      ],
+      "position_xyz": null,
+      "valence": 1
+    },
+    {
+      "id": 5,
+      "panel_ids": [
+        2
+      ],
+      "position_xyz": null,
+      "valence": 1
+    }
+  ]
+}
