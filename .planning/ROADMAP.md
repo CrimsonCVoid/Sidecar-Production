@@ -52,7 +52,7 @@ Plans:
 
 **Milestone Goal:** Fix real-data bugs blocking production use, expose snap engine via FastAPI, and build the Next.js labeling dashboard with shared-node magnet, undo/redo, snap preview, plus a dashboard index with sample table, diff viewer, and run monitor.
 
-- [ ] **Phase 3: Bug Fixes** - Fix densify area-loss bug and labeler duplicate-corner dedup so the engine is production-safe before API exposure
+- [x] **Phase 3: Bug Fixes** - Fix densify area-loss bug and labeler duplicate-corner dedup so the engine is production-safe before API exposure (completed 2026-04-19)
 - [ ] **Phase 4: FastAPI Sidecar** - Snap-preview endpoint, pipeline-run trigger, label persistence, and structured server-side logging on existing DigitalOcean droplet
 - [ ] **Phase 5: Labeling Dashboard** - Next.js Konva canvas with shared-node magnet, undo/redo, snap preview overlay, auto-close, mask.json output, browser-side error capture, and Playwright E2E tests for labeler flows
 - [ ] **Phase 6: Dashboard Index + Monitoring** - Sample table, filter chips, diff viewer, Supabase Realtime run monitor, and Playwright E2E tests for dashboard flows
@@ -71,8 +71,8 @@ Plans:
   3. A mask.json file containing duplicate last corners (as produced by the matplotlib labeler's double-click behavior) is loaded via `polygons_from_clicks` and produces the same polygon as the deduplicated version -- no error, no extra zero-length edges
 **Plans**: 2 plans
 Plans:
-- [ ] 03-01-PLAN.md -- Silent duplicate-corner dedup in Pydantic schema + tests (LABEL-01)
-- [ ] 03-02-PLAN.md -- Densify area-loss investigation, fix, diagnostic logging, fb7e705c regression test (FIX-01, FIX-02)
+- [x] 03-01-PLAN.md -- Silent duplicate-corner dedup in Pydantic schema + tests (LABEL-01)
+- [x] 03-02-PLAN.md -- Densify area-loss investigation, fix, diagnostic logging, fb7e705c regression test (FIX-01, FIX-02)
 
 **Deferred from Phase 3:** `make_synthetic_multi_hip()` in synthetic.py -- a 4-panel synthetic hip doesn't reproduce the multi-neighbor topology (3+ shared edges) that caused panel 8's failure. Revisit broader synthetic coverage in a later milestone.
 
@@ -123,7 +123,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. Feature Graph + Clustering | v1.0 | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
-| 3. Bug Fixes | v2.0 | 0/2 | In progress | - |
+| 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
 | 4. FastAPI Sidecar | v2.0 | 0/? | Not started | - |
 | 5. Labeling Dashboard | v2.0 | 0/? | Not started | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
@@ -131,4 +131,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 3 planned (2 plans, 1 wave)*
+*Last updated: 2026-04-19 -- Phase 3 complete (2/2 plans)*
