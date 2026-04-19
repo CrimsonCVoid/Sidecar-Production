@@ -9,6 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .panel_snap_v2.schema import PanelsInput
 from .planes import Plane
 
 log = logging.getLogger(__name__)
@@ -70,15 +71,18 @@ def polygons_from_clicks(
     """
     path = Path(panels_json_path)
     with open(path) as f:
-        meta = json.load(f)
+        raw = json.load(f)
+
+    # Pydantic validation at the input boundary (VALID-01, D-07)
+    validated = PanelsInput.model_validate(raw)
 
     polygons: dict[int, np.ndarray] = {}
-    for entry in meta.get("panels", []):
-        pid = int(entry["id"])
+    for entry in validated.panels:
+        pid = entry.id
         if pid not in planes:
             log.warning("panel %d in clicks but missing plane fit, skipping", pid)
             continue
-        corners_pix = np.asarray(entry["corners_pix"], dtype=np.float64)
+        corners_pix = np.asarray(entry.corners_pix, dtype=np.float64)
         if corners_pix.shape[0] < 3:
             log.warning("panel %d has %d corners, skipping", pid, corners_pix.shape[0])
             continue

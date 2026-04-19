@@ -1,6 +1,7 @@
 numpy>=1.26
 scipy>=1.11
 shapely>=2.0
+pydantic>=2.0
 scikit-image>=0.22
 opencv-python>=4.9
 trimesh>=4.0
