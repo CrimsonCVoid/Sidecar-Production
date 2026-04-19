@@ -2,12 +2,13 @@
 
 import { use, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { useLabelerStore } from "@/stores/labeler-store";
-import { getLabels, ApiError } from "@/lib/api";
+import { getLabels, saveLabels, snapPreview, ApiError } from "@/lib/api";
 import { initErrorCapture } from "@/lib/errors";
-import { Badge } from "@/components/ui/badge";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { LabelingHeader } from "@/components/labeling/LabelingHeader";
+import { LabelingToolbar } from "@/components/labeling/LabelingToolbar";
 
 const HillshadeCanvas = dynamic(
   () =>
@@ -30,8 +31,12 @@ export default function LabelingPage({
   params: Promise<{ sampleId: string }>;
 }) {
   const { sampleId } = use(params);
-  const panels = useLabelerStore((s) => s.panels);
   const loadPanels = useLabelerStore((s) => s.loadPanels);
+  const isSaving = useLabelerStore((s) => s.isSaving);
+  const isLoadingPreview = useLabelerStore((s) => s.isLoadingPreview);
+
+  // Register keyboard shortcuts
+  useKeyboardShortcuts();
 
   // Load saved labels on mount
   useEffect(() => {
@@ -58,36 +63,73 @@ export default function LabelingPage({
     return cleanup;
   }, [sampleId]);
 
+  // Save labels handler
+  const handleSave = async () => {
+    const { panels, setIsSaving } = useLabelerStore.getState();
+    if (panels.length === 0) return;
+    setIsSaving(true);
+    try {
+      const result = await saveLabels(sampleId, panels);
+      toast.success(`Labels saved (${result.panel_count} panels)`);
+    } catch (err) {
+      toast.error("Save failed. Check your connection and try again.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Snap preview handler
+  const handleSnapPreview = async () => {
+    const {
+      panels,
+      snapPreview: currentPreview,
+      setSnapPreview,
+      setIsLoadingPreview,
+    } = useLabelerStore.getState();
+
+    // Toggle off if already showing
+    if (currentPreview) {
+      setSnapPreview(null);
+      return;
+    }
+
+    if (panels.length < 2) {
+      toast.error(
+        "Snap preview failed. Ensure at least 2 panels are labeled, then try again.",
+      );
+      return;
+    }
+
+    setIsLoadingPreview(true);
+    try {
+      const result = await snapPreview({ panels });
+      setSnapPreview({
+        features: result.feature_graph.features,
+        snappedPolygons: result.snapped_polygons,
+      });
+      toast.success(
+        `Snap preview: ${result.feature_graph.features.length} features detected`,
+      );
+    } catch (err) {
+      toast.error(
+        "Snap preview failed. Ensure at least 2 panels are labeled, then try again.",
+      );
+    } finally {
+      setIsLoadingPreview(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen bg-zinc-950">
-      {/* Header (48px) */}
-      <div className="h-12 bg-zinc-900 flex items-center px-6 gap-4">
-        <button
-          onClick={() => window.history.back()}
-          className="text-zinc-400 hover:text-white transition-colors"
-          aria-label="Go back"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <h1 className="text-xl font-semibold text-white">
-          Labeling: {sampleId}
-        </h1>
-        <div className="ml-auto">
-          {/* Save button placeholder -- wired in Plan 04 */}
-        </div>
-      </div>
-
-      {/* Toolbar (44px) */}
-      <div className="h-11 bg-zinc-900 border-b border-zinc-800 flex items-center px-4 gap-2">
-        <span className="text-sm text-zinc-400">
-          Draw | Select | Undo | Redo | Delete | Snap Preview
-        </span>
-        <div className="ml-auto">
-          <Badge variant="secondary">{panels.length} panels</Badge>
-        </div>
-      </div>
-
-      {/* Canvas area (flex-1) */}
+      <LabelingHeader
+        sampleId={sampleId}
+        onSave={handleSave}
+        isSaving={isSaving}
+      />
+      <LabelingToolbar
+        onSnapPreview={handleSnapPreview}
+        isLoadingPreview={isLoadingPreview}
+      />
       <div className="flex-1" data-testid="labeler-canvas">
         <HillshadeCanvas sampleId={sampleId} />
       </div>

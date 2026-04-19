@@ -10,6 +10,7 @@ import { PolygonLayer } from "./PolygonLayer";
 import { DrawingLayer } from "./DrawingLayer";
 import { MagnetIndicator } from "./MagnetIndicator";
 import { AutoCloseIndicator } from "./AutoCloseIndicator";
+import { SnapPreviewLayer } from "./SnapPreviewLayer";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -241,6 +242,7 @@ export function HillshadeCanvas({ sampleId }: HillshadeCanvasProps) {
               y={autoCloseTarget?.y ?? 0}
               visible={autoCloseTarget !== null}
             />
+            <SnapPreviewLayer />
           </Layer>
         </Stage>
       )}
