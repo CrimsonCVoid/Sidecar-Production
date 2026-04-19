@@ -12,7 +12,7 @@
 
 ## Phases
 
-- [ ] **Phase 1: Feature Graph + Clustering** - Pure Python subpackage skeleton with winding normalization, union-find clustering, and feature graph construction; `--snap-v2-dryrun` flag prints graph and exits without touching downstream modules
+- [x] **Phase 1: Feature Graph + Clustering** - Pure Python subpackage skeleton with winding normalization, union-find clustering, and feature graph construction; `--snap-v2-dryrun` flag prints graph and exits without touching downstream modules (completed 2026-04-18)
 - [ ] **Phase 2: Apex Solver + Integration** - Valence-aware apex solving, edge densification, Shapely validation, Pydantic input schema, `--snap-v2` integration in `run_real.py`, `snap_v2_features.json` sidecar output, all 7 tests green, gable smoke test byte-identical
 
 ---
@@ -53,7 +53,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Feature Graph + Clustering | 3/3 | Executing | - |
+| 1. Feature Graph + Clustering | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | 0/? | Not started | - |
 
 ---
