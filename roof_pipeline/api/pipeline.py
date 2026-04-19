@@ -425,13 +425,7 @@ async def generate_pdf(
         dsm_local = tmp_path / "dsm.tif"
         dsm_local.write_bytes(dsm_bytes)
 
-        # Write panels.json in PanelsInput format
-        panels_json = tmp_path / "panels.json"
-        panels_json.write_text(json.dumps({"panels": remapped_panels}))
-
-        # Rasterize panel polygons into a mask so fit_planes can extract
-        # DSM elevations for each panel region. Panel IDs are 1-indexed
-        # in the mask (0 = background) to match fit_planes expectations.
+        # Rasterize panel polygons into mask and remap IDs to 1-indexed
         import rasterio
         import cv2
 
@@ -439,15 +433,17 @@ async def generate_pdf(
             h, w = ds.height, ds.width
             res_m = abs(ds.res[0]) if ds.res else sample.get("meters_per_px", 0.1)
 
-        # Remap panel IDs to 1-indexed (mask uses 0=background).
-        # Both the mask and panels.json must use the same IDs.
         remapped_panels = []
         mask_arr = np.zeros((h, w), dtype=np.uint8)
         for i, p in enumerate(panels):
-            new_id = i + 1  # 1-indexed
+            new_id = i + 1
             corners = np.array(p["corners_pix"], dtype=np.int32)
             cv2.fillPoly(mask_arr, [corners], new_id)
             remapped_panels.append({**p, "id": new_id})
+
+        # Write panels.json with remapped 1-indexed IDs
+        panels_json = tmp_path / "panels.json"
+        panels_json.write_text(json.dumps({"panels": remapped_panels}))
 
         mask_local = tmp_path / "mask.npy"
         np.save(mask_local, mask_arr)
