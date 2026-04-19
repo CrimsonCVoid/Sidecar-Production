@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from .config import Settings
 from .errors import router as errors_router
+from .hillshade import router as hillshade_router
 from .labels import router as labels_router
 from .middleware import configure_logging, structured_logging_middleware
 from .pipeline import router as pipeline_router
@@ -76,6 +77,7 @@ app.include_router(pipeline_router, prefix="/api/pipeline", tags=["pipeline"])
 app.include_router(labels_router, prefix="/api/labels", tags=["labels"])
 app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 app.include_router(solar_router, prefix="/api/solar", tags=["solar"])
+app.include_router(hillshade_router, prefix="/api/hillshade", tags=["hillshade"])
 
 
 # ---------------------------------------------------------------------------

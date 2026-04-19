@@ -1,14 +1,14 @@
-"""Label persistence endpoints: POST/GET /labels/{sampleId} (API-03, D-07).
+"""Label persistence endpoints: POST/GET /labels/{sampleId} (API-03).
 
-Table schema is deferred to Phase 5 per D-07. This endpoint provides the
-interface contract. Phase 5's labeling dashboard owns the table definition.
-
-For Phase 4, the endpoint reads/writes to a `labels` table with columns:
-  - sample_id (text, primary key or unique)
-  - panels (jsonb -- the panel click data)
-  - updated_at (timestamptz)
-
-If the table doesn't exist yet, the endpoint returns a clear error.
+Uses the training_labels table with schema:
+  - id (uuid, auto)
+  - sample_id (uuid, FK to training_samples)
+  - labeled_by (uuid, nullable)
+  - annotations (jsonb -- the panel click data)
+  - status (text: complete|skipped|flagged|in_progress)
+  - duration_ms (int, nullable)
+  - notes (text, nullable)
+  - created_at, updated_at (timestamptz)
 """
 
 from __future__ import annotations
@@ -36,23 +36,36 @@ async def save_labels(
 ):
     """Persist panel label data for a sample (API-03).
 
-    Upserts label data: if a row for sample_id exists, updates it.
-    Otherwise inserts a new row. Round-trip preserves all vertex coordinates.
+    Upserts into training_labels: stores panels as annotations jsonb.
     """
     request.state.sample_id = sample_id
 
     now = datetime.now(timezone.utc).isoformat()
-    payload = {
-        "sample_id": sample_id,
-        "panels": body.panels,
-        "updated_at": now,
-    }
 
     try:
-        # Try upsert: insert or update on conflict
-        supabase.table("labels").upsert(
-            payload, on_conflict="sample_id",
-        ).execute()
+        # Check if a label row already exists for this sample
+        existing = (
+            supabase.table("training_labels")
+            .select("id")
+            .eq("sample_id", sample_id)
+            .execute()
+        )
+
+        if existing.data:
+            # Update existing row
+            supabase.table("training_labels").update({
+                "annotations": {"panels": body.panels},
+                "status": "complete",
+                "updated_at": now,
+            }).eq("sample_id", sample_id).execute()
+        else:
+            # Insert new row
+            supabase.table("training_labels").insert({
+                "sample_id": sample_id,
+                "annotations": {"panels": body.panels},
+                "status": "complete",
+            }).execute()
+
     except Exception as exc:
         log.error("Failed to save labels for sample %s: %s", sample_id, exc)
         raise HTTPException(
@@ -72,12 +85,17 @@ async def get_labels(
 ):
     """Retrieve panel label data for a sample (API-03).
 
-    Returns the stored panel data with all vertex coordinates preserved.
+    Reads annotations jsonb from training_labels and returns as LabelData.
     Returns 404 if no labels exist for the sample.
     """
     request.state.sample_id = sample_id
 
-    result = supabase.table("labels").select("*").eq("sample_id", sample_id).execute()
+    result = (
+        supabase.table("training_labels")
+        .select("*")
+        .eq("sample_id", sample_id)
+        .execute()
+    )
     if not result.data:
         raise HTTPException(
             status_code=404,
@@ -85,7 +103,9 @@ async def get_labels(
         )
 
     row = result.data[0]
+    annotations = row.get("annotations") or {}
+    panels = annotations.get("panels", [])
     return LabelData(
         sample_id=row["sample_id"],
-        panels=row["panels"],
+        panels=panels,
     )
