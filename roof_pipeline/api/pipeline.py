@@ -220,6 +220,51 @@ async def _run_pipeline_bg(
         log.exception("pipeline run %s failed", run_id)
 
 
+@router.get("/samples")
+async def list_samples(
+    request: Request,
+    supabase: Client = Depends(get_supabase),
+):
+    """List all samples with their latest pipeline run status (DIDX-01).
+
+    Returns each sample joined with the most recent pipeline_runs row
+    so the dashboard can show address, panel count, and run status.
+    """
+    samples_result = supabase.table("samples").select("*").execute()
+    samples = samples_result.data or []
+
+    # Fetch latest run per sample in one query, ordered by started_at desc
+    runs_result = (
+        supabase.table("pipeline_runs")
+        .select("sample_id, status, progress_pct, started_at, completed_at, output_paths")
+        .order("started_at", desc=True)
+        .execute()
+    )
+    # Build map of sample_id -> latest run (first occurrence wins due to desc order)
+    latest_runs: dict[str, dict] = {}
+    for run in runs_result.data or []:
+        sid = run["sample_id"]
+        if sid not in latest_runs:
+            latest_runs[sid] = run
+
+    result = []
+    for s in samples:
+        sid = s["id"]
+        run = latest_runs.get(sid)
+        result.append({
+            "id": sid,
+            "address": s.get("address", sid),
+            "panel_count": s.get("panel_count", 0),
+            "latest_run_status": run["status"] if run else None,
+            "latest_run_progress": run.get("progress_pct", 0) if run else None,
+            "latest_run_started": run.get("started_at") if run else None,
+            "latest_run_completed": run.get("completed_at") if run else None,
+            "pdf_path": (run.get("output_paths") or {}).get("cutsheets_pdf") if run else None,
+        })
+
+    return result
+
+
 @router.post("/run", status_code=202, response_model=PipelineRunCreated)
 async def trigger_pipeline_run(
     body: PipelineRunRequest,
