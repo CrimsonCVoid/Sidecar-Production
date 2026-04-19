@@ -45,7 +45,12 @@ Plans:
   3. `output/snap_v2_features.json` is written alongside the PDF and contains a valid feature graph with `features` (id, valence, position_xyz, panel_ids) and `edges` (panel_a, panel_b, feature_ids) conforming to the documented schema
   4. Running `run_real.py --snap-v2 <gable_sample>` produces output files that are byte-for-byte identical to the same run with `--snap-v1` (the current pairwise snap path)
   5. Passing malformed polygon JSON to `polygons_from_clicks` (missing vertex array, wrong type) raises a Pydantic validation error with an actionable message -- the pipeline does not silently produce corrupt geometry
-**Plans**: TBD
+**Plans:** 4 plans
+Plans:
+- [ ] 02-01-PLAN.md -- Apex solver module with valence-2/3/4+ dispatch + TDD tests (TEST-02, TEST-03)
+- [ ] 02-02-PLAN.md -- Pydantic input validation schema + boundaries.py integration (VALID-01, VALID-02)
+- [ ] 02-03-PLAN.md -- Edge densification + Shapely validation with repair + TDD tests (TEST-06)
+- [ ] 02-04-PLAN.md -- Pipeline orchestration, --snap-v2 CLI flag, JSON sidecar, tiered golden-file smoke test (TEST-01)
 
 ---
 
@@ -54,9 +59,9 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Feature Graph + Clustering | 3/3 | Complete | 2026-04-18 |
-| 2. Apex Solver + Integration | 0/? | Not started | - |
+| 2. Apex Solver + Integration | 0/4 | Not started | - |
 
 ---
 
 *Roadmap created: 2026-04-18*
-*Last updated: 2026-04-18 after Phase 1 planning*
+*Last updated: 2026-04-18 after Phase 2 planning*
