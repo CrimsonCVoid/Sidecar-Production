@@ -72,11 +72,11 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
   const closePolygon = useLabelerStore((s) => s.closePolygon);
   const selectPanel = useLabelerStore((s) => s.selectPanel);
 
-  // Hillshade image loading
-  const hillshadeUrl = `${API_BASE}/api/hillshade/${sampleId}`;
-  const [image, imageStatus] = useImage(hillshadeUrl, "anonymous");
+  // Satellite RGB as base layer
+  const rgbUrl = `${API_BASE}/api/hillshade/${sampleId}/rgb`;
+  const [image, imageStatus] = useImage(rgbUrl, "anonymous");
 
-  // Heatmap image loading
+  // DSM heatmap as toggleable overlay
   const heatmapUrl = `${API_BASE}/api/hillshade/${sampleId}/heatmap`;
   const [heatmapImage] = useImage(heatmapUrl, "anonymous");
 
@@ -230,12 +230,12 @@ export function HillshadeCanvas({ sampleId, showHeatmap, heatmapOpacity }: Hills
     <div ref={containerRef} className="w-full h-full">
       {imageStatus === "loading" && (
         <div className="flex items-center justify-center h-full text-zinc-500">
-          Loading hillshade...
+          Loading satellite image...
         </div>
       )}
       {imageStatus === "failed" && (
         <div className="flex items-center justify-center h-full text-red-400">
-          Failed to load hillshade image
+          Failed to load satellite image
         </div>
       )}
       <Stage

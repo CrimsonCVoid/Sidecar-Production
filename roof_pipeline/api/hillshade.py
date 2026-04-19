@@ -123,6 +123,60 @@ async def get_hillshade(
     )
 
 
+@router.get("/{sample_id}/rgb")
+async def get_rgb(
+    sample_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    supabase: Client = Depends(get_supabase),
+):
+    """Return the satellite RGB image as PNG for a training sample."""
+    result = (
+        supabase.table("training_samples")
+        .select("rgb_storage_path")
+        .eq("id", sample_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"Sample {sample_id} not found")
+
+    rgb_path = result.data[0].get("rgb_storage_path")
+    if not rgb_path:
+        raise HTTPException(status_code=404, detail="No RGB image available")
+
+    rgb_bytes = None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
+        try:
+            rgb_bytes = supabase.storage.from_(bucket).download(rgb_path)
+            break
+        except Exception:
+            continue
+    if rgb_bytes is None:
+        raise HTTPException(status_code=404, detail="Could not download RGB from storage")
+
+    # Convert GeoTIFF to PNG
+    import rasterio
+
+    with rasterio.open(BytesIO(rgb_bytes)) as ds:
+        if ds.count >= 3:
+            r, g, b = ds.read(1), ds.read(2), ds.read(3)
+            rgb_arr = np.stack([r, g, b], axis=-1)
+        else:
+            band = ds.read(1)
+            rgb_arr = np.stack([band, band, band], axis=-1)
+
+    img = Image.fromarray(rgb_arr.astype(np.uint8), mode="RGB")
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    return Response(
+        content=buf.read(),
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
 @router.get("/{sample_id}/heatmap")
 async def get_heatmap(
     sample_id: str,
