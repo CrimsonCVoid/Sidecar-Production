@@ -17,8 +17,8 @@ Requirements for Milestone 1. Each maps to roadmap phases.
 - [x] **TOPO-06**: Valence-3 clusters resolved via closed-form 3x3 plane intersection (`numpy.linalg.solve`)
 - [x] **TOPO-07**: Valence-4+ clusters resolved via least-squares plane intersection (`numpy.linalg.lstsq`) with rows weighted by `1/rms_residual`
 - [x] **TOPO-08**: Solved apex point written back into every member panel's vertex array at the correct index
-- [ ] **TOPO-09**: Edge-walking densify: for each shared-edge feature, collect all vertices from touching panels, sort by parameter t along the shared edge line, redistribute so every panel carries the same vertex list along that edge
-- [ ] **TOPO-10**: Shapely validation pass after snapping — each polygon checked with `is_valid` + `is_simple`; on failure, attempt `make_valid()` repair; if still invalid, raise with panel ID
+- [x] **TOPO-09**: Edge-walking densify: for each shared-edge feature, collect all vertices from touching panels, sort by parameter t along the shared edge line, redistribute so every panel carries the same vertex list along that edge
+- [x] **TOPO-10**: Shapely validation pass after snapping — each polygon checked with `is_valid` + `is_simple`; on failure, attempt `make_valid()` repair; if still invalid, raise with panel ID
 - [ ] **TOPO-11**: No new dependencies added to the pipeline module — only scipy, numpy, shapely (all already in requirements.txt)
 
 ### Input Validation
@@ -39,7 +39,7 @@ Requirements for Milestone 1. Each maps to roadmap phases.
 - [x] **TEST-03**: `test_ridge_three_panels_welds` — three panels, ridge apex, same exact-point requirement
 - [ ] **TEST-04**: `test_transitive_cluster_above_tol` — three points at pairwise distances (0.9, 0.9, 1.3) with tol=1.0 must cluster via multi-pass expansion
 - [ ] **TEST-05**: `test_mixed_winding_hip` — two panels traversing shared edge in opposite order; winding normalization produces correct feature graph
-- [ ] **TEST-06**: `test_self_intersecting_input_repaired` — crossed-edge input, output must be `is_valid`
+- [x] **TEST-06**: `test_self_intersecting_input_repaired` — crossed-edge input, output must be `is_valid`
 - [ ] **TEST-07**: `test_l_shaped_panel_winding` — non-convex L-shaped panel, winding normalization must not flip polygon due to interior notch
 
 ## v2 Requirements (Milestone 2)
@@ -90,8 +90,8 @@ Deferred to follow-up milestone. Tracked but not in current roadmap.
 | TOPO-06 | Phase 2 | Complete (02-01) |
 | TOPO-07 | Phase 2 | Complete (02-01) |
 | TOPO-08 | Phase 2 | Complete (02-01) |
-| TOPO-09 | Phase 2 | Pending |
-| TOPO-10 | Phase 2 | Pending |
+| TOPO-09 | Phase 2 | Complete (02-03) |
+| TOPO-10 | Phase 2 | Complete (02-03) |
 | TOPO-11 | Phase 1 | Pending |
 | VALID-01 | Phase 2 | Complete (02-02) |
 | VALID-02 | Phase 2 | Complete (02-02) |
@@ -103,7 +103,7 @@ Deferred to follow-up milestone. Tracked but not in current roadmap.
 | TEST-03 | Phase 2 | Complete (02-01) |
 | TEST-04 | Phase 1 | Pending |
 | TEST-05 | Phase 1 | Pending |
-| TEST-06 | Phase 2 | Pending |
+| TEST-06 | Phase 2 | Complete (02-03) |
 | TEST-07 | Phase 1 | Pending |
 
 **Coverage:**
@@ -113,4 +113,4 @@ Deferred to follow-up milestone. Tracked but not in current roadmap.
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-19 after 02-02 execution (VALID-01, VALID-02 complete)*
+*Last updated: 2026-04-19 after 02-03 execution (TOPO-09, TOPO-10, TEST-06 complete)*

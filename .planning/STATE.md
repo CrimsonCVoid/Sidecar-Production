@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02-PLAN.md (Pydantic Input Validation)
-last_updated: "2026-04-19T02:53:00.000Z"
+stopped_at: Completed 02-03-PLAN.md (Densify + Validate)
+last_updated: "2026-04-19T03:06:00.000Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 7
-  completed_plans: 5
-  percent: 71
+  completed_plans: 6
+  percent: 86
 ---
 
 # Project State: Topology-Aware Snap Engine (Milestone 1)
@@ -25,13 +25,13 @@ progress:
 ## Current Position
 
 **Phase:** 2 — Apex Solver + Integration (executing)
-**Plan:** 02-02 complete, 02-03 next
-**Status:** Plan 2 of 4 complete in Phase 2
+**Plan:** 02-03 complete, 02-04 next
+**Status:** Plan 3 of 4 complete in Phase 2
 
 ```
-[Phase 1: Feature Graph + Clustering ] [ Phase 2: Apex Solver + Integration ]
-[███████████████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░]
-71%
+[Phase 1: Feature Graph + Clustering ] [ Phase 2: Apex Solver + Integration    ]
+[█████████████████████████████████████████████████████████████████░░░░░░░░░░░░░░]
+86%
 ```
 
 ---
@@ -39,13 +39,14 @@ progress:
 ## Performance Metrics
 
 - Phases complete: 1/2
-- Tests passing: 25/25 (12 Phase 1 + 5 Phase 2 solver + 8 Phase 2 schema)
-- Requirements delivered: 16/22 (TOPO-01..04, TOPO-05..08, TOPO-11, VALID-01, VALID-02, TEST-02..05, TEST-07)
+- Tests passing: 36/36 (12 Phase 1 + 5 Phase 2 solver + 8 Phase 2 schema + 3 densify + 8 validate)
+- Requirements delivered: 19/22 (TOPO-01..04, TOPO-05..10, TOPO-11, VALID-01, VALID-02, TEST-02..06, TEST-07)
 
 | Phase | Plan | Duration | Tasks | Files |
 |-------|------|----------|-------|-------|
 | 02    | 01   | 7min     | 3     | 6     |
 | 02    | 02   | 2min     | 2     | 4     |
+| 02    | 03   | 9min     | 3     | 4     |
 
 ---
 
@@ -62,13 +63,14 @@ progress:
 - Condition-number thresholds revised: 1e8 WARNING fallback, 1e12 hard-fail (100 was too tight for real geometry)
 - solve_apices returns tuple (polygons, solved_positions) for downstream graph position update per 02-CONTEXT.md review note
 - Weighted lstsq uses 1.0/max(rms_residual, 1e-6) to prevent divide-by-zero on perfectly-fit planes
-- _z_on_plane copied into solver.py rather than imported from snapping.py (snapping.py being superseded)
+- _z_on_plane copied into solver.py and densify.py rather than imported from snapping.py (snapping.py being superseded)
+- GeometryCollection handling added alongside MultiPolygon in validate.py -- make_valid returns GeometryCollection for notch-style self-intersections
 - ConfigDict(strict=True, extra='forbid') on Pydantic models per review notes -- prevents silent coercion and extra field injection for Milestone 2 HTTP surface
 - Pydantic exception to TOPO-11 accepted per D-07 -- VALID-01 explicitly offers it and Milestone 2 FastAPI needs it
 
 ### Active Todos
 
-- Execute Phase 2 Plans 02-03 through 02-04
+- Execute Phase 2 Plan 02-04 (integration + smoke test)
 
 ### Known Blockers
 
@@ -86,12 +88,12 @@ progress:
 
 ## Session Continuity
 
-**Last session:** 2026-04-19T02:53:00Z
-**Stopped at:** Completed 02-02-PLAN.md (Pydantic Input Validation)
-**Resume file:** .planning/phases/02-apex-solver-integration/02-03-PLAN.md
-**Next action:** `/gsd-execute-phase 2` (continue with plan 02-03)
+**Last session:** 2026-04-19T03:06:00Z
+**Stopped at:** Completed 02-03-PLAN.md (Densify + Validate)
+**Resume file:** .planning/phases/02-apex-solver-integration/02-04-PLAN.md
+**Next action:** `/gsd-execute-phase 2` (continue with plan 02-04)
 
 ---
 
 *State initialized: 2026-04-18*
-*Last updated: 2026-04-19 after 02-02 execution complete*
+*Last updated: 2026-04-19 after 02-03 execution complete*
