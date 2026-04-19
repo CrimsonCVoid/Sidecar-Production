@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: completed
-stopped_at: Phase 2 context gathered
-last_updated: "2026-04-19T02:04:35.198Z"
+status: ready_to_execute
+stopped_at: Phase 2 planned — 4 plans in 3 waves
+last_updated: "2026-04-18T00:00:00.000Z"
 progress:
   total_phases: 2
   completed_phases: 1
-  total_plans: 3
+  total_plans: 7
   completed_plans: 3
-  percent: 100
+  percent: 50
 ---
 
 # Project State: Topology-Aware Snap Engine (Milestone 1)
@@ -24,8 +24,8 @@ progress:
 
 ## Current Position
 
-**Phase:** 2 — Apex Solver + Integration (next)
-**Status:** Phase 1 complete, ready for Phase 2
+**Phase:** 2 — Apex Solver + Integration (planned)
+**Status:** Ready to execute — 4 plans in 3 waves
 
 ```
 [Phase 1: Feature Graph + Clustering ] [ Phase 2: Apex Solver + Integration ]
@@ -53,7 +53,7 @@ progress:
 - `shapely.make_valid` preferred over `buffer(0)` — buffer(0) discards geometry in bowtie topologies
 - Winding normalization must run before union-find (assumes consistent vertex sequences)
 - Feature graph built exactly once, after all 3 tolerance passes complete (prevents valence drift)
-- Condition-number guard (`np.linalg.cond(N) > 100`) before lstsq; fallback to centroid with warning
+- Condition-number thresholds revised: 1e8 WARNING fallback, 1e12 hard-fail (100 was too tight for real geometry)
 
 ### Active Todos
 
@@ -76,9 +76,9 @@ progress:
 ## Session Continuity
 
 **Last session:** 2026-04-19T02:04:35.193Z
-**Stopped at:** Phase 2 context gathered
-**Resume file:** .planning/phases/02-apex-solver-integration/02-CONTEXT.md
-**Next action:** `/gsd-discuss-phase 2` or `/gsd-plan-phase 2`
+**Stopped at:** Phase 2 planned — 4 plans in 3 waves
+**Resume file:** .planning/phases/02-apex-solver-integration/02-01-PLAN.md
+**Next action:** `/gsd-execute-phase 2`
 
 ---
 
