@@ -47,7 +47,7 @@ Plans:
   5. Passing malformed polygon JSON to `polygons_from_clicks` (missing vertex array, wrong type) raises a Pydantic validation error with an actionable message -- the pipeline does not silently produce corrupt geometry
 **Plans:** 4 plans
 Plans:
-- [ ] 02-01-PLAN.md -- Apex solver module with valence-2/3/4+ dispatch + TDD tests (TEST-02, TEST-03)
+- [x] 02-01-PLAN.md -- Apex solver module with valence-2/3/4+ dispatch + TDD tests (TEST-02, TEST-03)
 - [ ] 02-02-PLAN.md -- Pydantic input validation schema + boundaries.py integration (VALID-01, VALID-02)
 - [ ] 02-03-PLAN.md -- Edge densification + Shapely validation with repair + TDD tests (TEST-06)
 - [ ] 02-04-PLAN.md -- Pipeline orchestration, --snap-v2 CLI flag, JSON sidecar, tiered golden-file smoke test (TEST-01)
@@ -59,9 +59,9 @@ Plans:
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Feature Graph + Clustering | 3/3 | Complete | 2026-04-18 |
-| 2. Apex Solver + Integration | 0/4 | Not started | - |
+| 2. Apex Solver + Integration | 1/4 | In progress | - |
 
 ---
 
 *Roadmap created: 2026-04-18*
-*Last updated: 2026-04-18 after Phase 2 planning*
+*Last updated: 2026-04-19 after 02-01 execution complete*
