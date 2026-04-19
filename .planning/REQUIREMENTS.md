@@ -3,27 +3,27 @@
 **Defined:** 2026-04-18
 **Core Value:** Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-correct point with zero slivers in the output mesh.
 
-## v1 Requirements (Milestone 1 — Complete)
+## v1 Requirements (Milestone 1 -- Complete)
 
 All 22 requirements delivered. See traceability table below.
 
 ### Topology Engine
 
-- [x] **TOPO-01**: `snap_polygons(polygons, planes, tol)` returns `dict[int, ndarray]` — same I/O shape as `snap_shared_edges` so orchestrator swaps with one line
+- [x] **TOPO-01**: `snap_polygons(polygons, planes, tol)` returns `dict[int, ndarray]` -- same I/O shape as `snap_shared_edges` so orchestrator swaps with one line
 - [x] **TOPO-02**: Union-find clusters all polygon vertices using three-pass expanding tolerance (0.3t -> 0.6t -> t) so transitively-connected hip apices get grouped
-- [x] **TOPO-03**: Feature graph built from clusters — nodes = clusters, edges = "panel P touches cluster C", each cluster classified by valence (corner=2, ridge_apex=3, hip_apex=4+)
+- [x] **TOPO-03**: Feature graph built from clusters -- nodes = clusters, edges = "panel P touches cluster C", each cluster classified by valence (corner=2, ridge_apex=3, hip_apex=4+)
 - [x] **TOPO-04**: Per-panel CCW winding normalization before graph build, correctly handling non-convex (L-shaped) panels without flipping due to interior notch
 - [x] **TOPO-05**: Valence-2 clusters resolved via XY centroid + per-plane Z reconstruction (matches current behavior)
 - [x] **TOPO-06**: Valence-3 clusters resolved via closed-form 3x3 plane intersection (`numpy.linalg.solve`)
 - [x] **TOPO-07**: Valence-4+ clusters resolved via least-squares plane intersection (`numpy.linalg.lstsq`) with rows weighted by `1/rms_residual`
 - [x] **TOPO-08**: Solved apex point written back into every member panel's vertex array at the correct index
 - [x] **TOPO-09**: Edge-walking densify: for each shared-edge feature, collect all vertices from touching panels, sort by parameter t along the shared edge line, redistribute so every panel carries the same vertex list along that edge
-- [x] **TOPO-10**: Shapely validation pass after snapping — each polygon checked with `is_valid` + `is_simple`; on failure, attempt `make_valid()` repair; if still invalid, raise with panel ID
-- [x] **TOPO-11**: No new dependencies added to the pipeline module — only scipy, numpy, shapely (all already in requirements.txt). Pydantic exception accepted per D-07.
+- [x] **TOPO-10**: Shapely validation pass after snapping -- each polygon checked with `is_valid` + `is_simple`; on failure, attempt `make_valid()` repair; if still invalid, raise with panel ID
+- [x] **TOPO-11**: No new dependencies added to the pipeline module -- only scipy, numpy, shapely (all already in requirements.txt). Pydantic exception accepted per D-07.
 
 ### Input Validation
 
-- [x] **VALID-01**: JSON schema validation at `polygons_from_clicks` boundary using Pydantic — security surface since dashboard writes to this contract over HTTP
+- [x] **VALID-01**: JSON schema validation at `polygons_from_clicks` boundary using Pydantic -- security surface since dashboard writes to this contract over HTTP
 - [x] **VALID-02**: Schema rejects malformed polygon data (missing fields, wrong types, empty vertex arrays) with actionable error messages
 
 ### Integration
@@ -34,21 +34,21 @@ All 22 requirements delivered. See traceability table below.
 
 ### Test Suite
 
-- [x] **TEST-01**: `test_gable_two_panels_unchanged` — deterministic v2 output verified via tiered golden-file comparison
-- [x] **TEST-02**: `test_hip_apex_four_panels_welds` — four panels at one point, all four output polygons contain exact same (x, y, z) at that apex
-- [x] **TEST-03**: `test_ridge_three_panels_welds` — three panels, ridge apex, same exact-point requirement
-- [x] **TEST-04**: `test_transitive_cluster_above_tol` — three points at pairwise distances (0.9, 0.9, 1.3) with tol=1.0 must cluster via multi-pass expansion
-- [x] **TEST-05**: `test_mixed_winding_hip` — two panels traversing shared edge in opposite order; winding normalization produces correct feature graph
-- [x] **TEST-06**: `test_self_intersecting_input_repaired` — crossed-edge input, output must be `is_valid`
-- [x] **TEST-07**: `test_l_shaped_panel_winding` — non-convex L-shaped panel, winding normalization must not flip polygon due to interior notch
+- [x] **TEST-01**: `test_gable_two_panels_unchanged` -- deterministic v2 output verified via tiered golden-file comparison
+- [x] **TEST-02**: `test_hip_apex_four_panels_welds` -- four panels at one point, all four output polygons contain exact same (x, y, z) at that apex
+- [x] **TEST-03**: `test_ridge_three_panels_welds` -- three panels, ridge apex, same exact-point requirement
+- [x] **TEST-04**: `test_transitive_cluster_above_tol` -- three points at pairwise distances (0.9, 0.9, 1.3) with tol=1.0 must cluster via multi-pass expansion
+- [x] **TEST-05**: `test_mixed_winding_hip` -- two panels traversing shared edge in opposite order; winding normalization produces correct feature graph
+- [x] **TEST-06**: `test_self_intersecting_input_repaired` -- crossed-edge input, output must be `is_valid`
+- [x] **TEST-07**: `test_l_shaped_panel_winding` -- non-convex L-shaped panel, winding normalization must not flip polygon due to interior notch
 
-## v2 Requirements (Milestone 2 — Active)
+## v2 Requirements (Milestone 2 -- Active)
 
 ### Bug Fixes
 
-- [ ] **FIX-01**: Investigate and fix densify make_valid MultiPolygon 65.9% area loss on fb7e705c panel 8 (12-panel hip-and-valley roof) — pipeline completes without area-change rejection
+- [ ] **FIX-01**: Investigate and fix densify make_valid MultiPolygon 65.9% area loss on fb7e705c panel 8 (12-panel hip-and-valley roof) -- pipeline completes without area-change rejection
 - [ ] **FIX-02**: Golden-file regression test for 12-panel hip-and-valley roof ensuring densify passes without area-change rejection
-- [ ] **LABEL-01**: Silent duplicate-corner removal in winding normalization — protects legacy mask.json files already in Supabase without breaking valid polygons
+- [ ] **LABEL-01**: Silent duplicate-corner removal in winding normalization -- protects legacy mask.json files already in Supabase without breaking valid polygons
 
 ### FastAPI Sidecar
 
@@ -74,11 +74,13 @@ All 22 requirements delivered. See traceability table below.
 
 ### Testing
 
-- [ ] **TESTING-01**: Playwright E2E tests for critical labeling flows — label-save-reload, undo-redo, magnet-snap-override (minimum 3 tests)
+- [ ] **TESTING-01a**: Playwright E2E tests for labeler flows -- label-save-reload, undo-redo, magnet-snap-override (minimum 3 tests)
+- [ ] **TESTING-01b**: Playwright E2E tests for dashboard flows -- sample list navigation, run monitor status updates, diff viewer rendering
 
 ### Observability
 
-- [ ] **OBSERVABILITY-01**: Structured JSON logging for FastAPI sidecar (trace_id, sample_id, endpoint, latency_ms, error_type) + browser-side error capture to backend endpoint or Sentry
+- [ ] **OBSERVABILITY-01a**: Structured JSON logging for FastAPI sidecar (trace_id, sample_id, endpoint, latency_ms, error_type)
+- [ ] **OBSERVABILITY-01b**: Browser-side error capture to backend logging endpoint or Sentry
 
 ## Out of Scope
 
@@ -128,31 +130,32 @@ All 22 requirements delivered. See traceability table below.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| FIX-01 | — | Not started |
-| FIX-02 | — | Not started |
-| LABEL-01 | — | Not started |
-| API-01 | — | Not started |
-| API-02 | — | Not started |
-| API-03 | — | Not started |
-| DASH-01 | — | Not started |
-| DASH-02 | — | Not started |
-| DASH-03 | — | Not started |
-| DASH-04 | — | Not started |
-| DASH-05 | — | Not started |
-| DASH-06 | — | Not started |
-| DIDX-01 | — | Not started |
-| DIDX-02 | — | Not started |
-| DIDX-03 | — | Not started |
-| DIDX-04 | — | Not started |
-| TESTING-01 | — | Not started |
-| OBSERVABILITY-01 | — | Not started |
+| FIX-01 | Phase 3 | Not started |
+| FIX-02 | Phase 3 | Not started |
+| LABEL-01 | Phase 3 | Not started |
+| API-01 | Phase 4 | Not started |
+| API-02 | Phase 4 | Not started |
+| API-03 | Phase 4 | Not started |
+| OBSERVABILITY-01a | Phase 4 | Not started |
+| DASH-01 | Phase 5 | Not started |
+| DASH-02 | Phase 5 | Not started |
+| DASH-03 | Phase 5 | Not started |
+| DASH-04 | Phase 5 | Not started |
+| DASH-05 | Phase 5 | Not started |
+| DASH-06 | Phase 5 | Not started |
+| OBSERVABILITY-01b | Phase 5 | Not started |
+| TESTING-01a | Phase 5 | Not started |
+| DIDX-01 | Phase 6 | Not started |
+| DIDX-02 | Phase 6 | Not started |
+| DIDX-03 | Phase 6 | Not started |
+| DIDX-04 | Phase 6 | Not started |
+| TESTING-01b | Phase 6 | Not started |
 
 **Coverage:**
 - v1 requirements: 22 total, 22 complete
-- v2 requirements: 18 total
-- Mapped to phases: 0 (pending roadmap)
-- Unmapped: 18
+- v2 requirements: 20 total (18 original, 2 split into a/b), 20 mapped to phases
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-04-18*
-*Last updated: 2026-04-19 — Milestone 2 requirements defined (18 requirements)*
+*Last updated: 2026-04-19 -- Milestone 2 revised (20 requirements mapped to Phases 3-6, tests folded into feature phases)*
