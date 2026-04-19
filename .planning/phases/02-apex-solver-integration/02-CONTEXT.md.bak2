@@ -23,6 +23,8 @@ Complete the `panel_snap_v2` engine: valence-aware apex solving (valence-2 centr
 - **D-05:** Area change tolerance is graduated. Under 0.1% (`abs(delta)/original < 0.001`), silent — this is floating-point noise from make_valid(). Between 0.1% and 1%, log WARNING with panel ID, old area, new area, and delta percentage. At 1% or above, hard-fail with same info plus remediation hint: "repair changed polygon area by {pct}% — likely cause: solver produced vertex outside original hull, or densify inserted vertex on wrong side of edge. Re-label panel boundary or reduce --snap-tol." Aligns with STATE.md pitfall #4 on the 1% hard-fail threshold.
 - **D-06:** If `make_valid()` returns a MultiPolygon, keep the piece with the largest area and discard the rest. Log WARNING with panel ID and ratio (largest_area / total_area). If ratio < 0.95, hard-fail with panel ID — too much geometry is being discarded to consider this a clean repair.
 
+
+### Input schema design
 - **D-07:** Use Pydantic for input validation at the `polygons_from_clicks` boundary (VALID-01). Exception to TOPO-11 accepted — VALID-01 explicitly offers Pydantic, and FastAPI in Milestone 2 will need it natively. Add `pydantic>=2.0` to `requirements.txt`.
 - **D-08:** Schema lives in `panel_snap_v2/schema.py`. `boundaries.py` imports from it. Single source of truth for both CLI and future HTTP API.
 
@@ -122,13 +124,3 @@ None — discussion stayed within phase scope
 
 *Phase: 02-apex-solver-integration*
 *Context gathered: 2026-04-18*
-
----
-
-## Plan Review Notes (added post-planning)
-
-- **Solver rms_residual guard:** Weighted lstsq must use `1.0 / max(rms_residual, 1e-6)` not `1.0 / rms_residual`. Prevents divide-by-zero on perfectly-fit planes.
-- **Schema strict mode:** Both `PanelCorners` and `PanelsInput` must have `model_config = ConfigDict(strict=True, extra='forbid')`. Pydantic v2 defaults to `extra='ignore'` which silently drops unknown fields — unacceptable for the Milestone 2 HTTP surface.
-- **Validate 3D reconstruction:** Nearest-neighbor match threshold is 1e-8 meters. Vertices without match within that threshold get Z from `_z_on_plane`. If more than 10% of a polygon's repaired vertices fall into the no-match path, log WARNING: "panel {id}: make_valid performed structural repair ({count}/{total} vertices relocated)".
-- **_update_graph_positions correct implementation:** Do NOT re-cluster in this function. Modify `solve_apices` to return `tuple[dict[int, np.ndarray], dict[int, np.ndarray]]` where the second dict maps cluster_root to solved_xyz. `_update_graph_positions` then walks `graph["features"]`, looks up each feature's cluster_root from graph construction metadata, and assigns `feature["position_xyz"] = solved_positions[cluster_root].tolist()`. This requires `build_feature_graph` to store cluster_root on each feature node — add that to the graph schema as `cluster_root: int` alongside existing fields.
-- **solve_apices signature expansion:** Plan 02-01's `solve_apices` must return `tuple[dict[int, np.ndarray], dict[int, np.ndarray]]` (polygons, cluster_root_to_solved_xyz), not just polygons. Plan 02-04 consumes the second return value in `_update_graph_positions`. Update the test_solver.py tests to destructure the tuple: `polygons_out, solved_positions = solve_apices(...)`.

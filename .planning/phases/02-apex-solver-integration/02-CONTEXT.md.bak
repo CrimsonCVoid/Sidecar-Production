@@ -14,15 +14,16 @@ Complete the `panel_snap_v2` engine: valence-aware apex solving (valence-2 centr
 ## Implementation Decisions
 
 ### Solver fallback behavior
-- **D-01:** Two thresholds on the condition number of the stacked plane-normal matrix used for least-squares apex intersection. When `1e8 < cond(N) <= 1e12`, fall back to XY centroid + per-plane Z reconstruction (same as valence-2). Log a WARNING with cluster id, contributing panel IDs, condition number in scientific notation, and each contributing plane's RMS residual so the user can diagnose whether the near-singular condition is genuine near-parallel geometry or a bad upstream plane fit. Log format: `snap_v2 fallback cluster_id={id} panels={[ids]} cond={val:.2e} rms=[{r1:.4f},{r2:.4f},...]`. When `cond(N) > 1e12`, hard-fail with the same diagnostic information plus a remediation hint pointing the user to the plane-fit stage (likely upstream bug, not real geometry). Threshold of 100 is far too tight — well-conditioned real LS problems routinely hit cond 10^3 to 10^6 from floating-point noise alone, and a 100 threshold would fall back on every real hip roof, making the LS solver dead code.
+- **D-01:** When near-parallel planes trigger the condition-number guard (`cond(N) > 100`), fall back to XY centroid + per-plane Z reconstruction (same as valence-2). Log a warning with panel IDs and condition number. Pipeline continues — the result is slightly less precise but not broken.
 - **D-02:** Valence-2 clusters use XY centroid of clustered points, with Z reconstructed independently from each panel's own plane. This matches current v1 pairwise snap behavior and preserves backward compatibility. Each panel gets its own Z at the shared XY centroid.
 - **D-03:** Solver logs a one-line summary at INFO level after completion: e.g., `"snap_v2: solved 3 apices (1 ridge, 2 hip), 8 corner snaps, 0 fallbacks"`. Consistent with existing pipeline stage logging pattern (`log.info("=== stage N: description ===")`).
 
 ### Validation + repair strictness
-- **D-04:** Shapely validation runs twice with different strictness levels. First pass (post-solver) is read-only: `is_valid + is_simple` checks only, no repair, failures log at DEBUG level. This is diagnostic telemetry — it tells you whether the solver alone is producing clean output, separate from densify's behavior. Second pass (post-densify) is the correctness gate: runs `make_valid()` if needed, logs at WARNING on repair, ERROR and re-raises on hard failure. Failure messages include which stage failed: "panel {id} invalid after {solver|densify}: {shapely_reason}". Do NOT run make_valid() at the first pass — first pass is read-only. Repair only happens at the second pass per TOPO-10. Rationale: if first pass silently repaired issues, the second pass would see clean geometry and the diagnostic signal would be lost.
-- **D-05:** Area change tolerance is graduated. Under 0.1% (`abs(delta)/original < 0.001`), silent — this is floating-point noise from make_valid(). Between 0.1% and 1%, log WARNING with panel ID, old area, new area, and delta percentage. At 1% or above, hard-fail with same info plus remediation hint: "repair changed polygon area by {pct}% — likely cause: solver produced vertex outside original hull, or densify inserted vertex on wrong side of edge. Re-label panel boundary or reduce --snap-tol." Aligns with STATE.md pitfall #4 on the 1% hard-fail threshold.
-- **D-06:** If `make_valid()` returns a MultiPolygon, keep the piece with the largest area and discard the rest. Log WARNING with panel ID and ratio (largest_area / total_area). If ratio < 0.95, hard-fail with panel ID — too much geometry is being discarded to consider this a clean repair.
+- **D-04:** Shapely validation runs twice — once after the solver step and once after edge densification. Two passes catch problems early (solver output) before densify potentially masks them.
+- **D-05:** Area change tolerance is 1%. If `abs(repaired_area - original_area) / original_area > 0.01` after `make_valid()`, raise with panel ID. Aligns with STATE.md pitfall #4.
+- **D-06:** If `make_valid()` returns a MultiPolygon, keep the piece with the largest area and discard the rest. Log a warning with panel ID and discarded area percentage. Do not hard-fail.
 
+### Input schema design
 - **D-07:** Use Pydantic for input validation at the `polygons_from_clicks` boundary (VALID-01). Exception to TOPO-11 accepted — VALID-01 explicitly offers Pydantic, and FastAPI in Milestone 2 will need it natively. Add `pydantic>=2.0` to `requirements.txt`.
 - **D-08:** Schema lives in `panel_snap_v2/schema.py`. `boundaries.py` imports from it. Single source of truth for both CLI and future HTTP API.
 
@@ -122,13 +123,3 @@ None — discussion stayed within phase scope
 
 *Phase: 02-apex-solver-integration*
 *Context gathered: 2026-04-18*
-
----
-
-## Plan Review Notes (added post-planning)
-
-- **Solver rms_residual guard:** Weighted lstsq must use `1.0 / max(rms_residual, 1e-6)` not `1.0 / rms_residual`. Prevents divide-by-zero on perfectly-fit planes.
-- **Schema strict mode:** Both `PanelCorners` and `PanelsInput` must have `model_config = ConfigDict(strict=True, extra='forbid')`. Pydantic v2 defaults to `extra='ignore'` which silently drops unknown fields — unacceptable for the Milestone 2 HTTP surface.
-- **Validate 3D reconstruction:** Nearest-neighbor match threshold is 1e-8 meters. Vertices without match within that threshold get Z from `_z_on_plane`. If more than 10% of a polygon's repaired vertices fall into the no-match path, log WARNING: "panel {id}: make_valid performed structural repair ({count}/{total} vertices relocated)".
-- **_update_graph_positions correct implementation:** Do NOT re-cluster in this function. Modify `solve_apices` to return `tuple[dict[int, np.ndarray], dict[int, np.ndarray]]` where the second dict maps cluster_root to solved_xyz. `_update_graph_positions` then walks `graph["features"]`, looks up each feature's cluster_root from graph construction metadata, and assigns `feature["position_xyz"] = solved_positions[cluster_root].tolist()`. This requires `build_feature_graph` to store cluster_root on each feature node — add that to the graph schema as `cluster_root: int` alongside existing fields.
-- **solve_apices signature expansion:** Plan 02-01's `solve_apices` must return `tuple[dict[int, np.ndarray], dict[int, np.ndarray]]` (polygons, cluster_root_to_solved_xyz), not just polygons. Plan 02-04 consumes the second return value in `_update_graph_positions`. Update the test_solver.py tests to destructure the tuple: `polygons_out, solved_positions = solve_apices(...)`.
