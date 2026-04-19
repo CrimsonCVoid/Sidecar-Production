@@ -85,7 +85,12 @@ Plans:
   2. POST `/run-pipeline` triggers a full pipeline run and writes status updates (queued, running, complete, failed) to a Supabase `pipeline_runs` table that the dashboard can query
   3. POST `/labels/{sampleId}` persists panel label data to Supabase and GET `/labels/{sampleId}` retrieves it -- round-trip preserves all vertex coordinates without loss
   4. Every request logs a structured JSON line containing trace_id, sample_id, endpoint, latency_ms, and error_type (if any)
-**Plans**: TBD
+**Plans**: 4 plans
+Plans:
+- [ ] 04-01-PLAN.md -- API skeleton: config, deps, middleware, schemas, app factory, stub routers (OBSERVABILITY-01a)
+- [ ] 04-02-PLAN.md -- run_real.py refactor: extract run_pipeline() callable (API-02 prerequisite)
+- [ ] 04-03-PLAN.md -- Snap preview endpoint + test infrastructure (API-01, OBSERVABILITY-01a)
+- [ ] 04-04-PLAN.md -- Pipeline run + labels endpoints + tests (API-02, API-03)
 
 ### Phase 5: Labeling Dashboard
 **Goal**: Users can draw, edit, and preview panel polygons on a hillshade canvas with shared-node snapping that eliminates ridge drift at the source, with browser-side error capture and Playwright E2E tests for labeler flows
@@ -124,11 +129,11 @@ Plans:
 | 1. Feature Graph + Clustering | v1.0 | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
-| 4. FastAPI Sidecar | v2.0 | 0/? | Not started | - |
+| 4. FastAPI Sidecar | v2.0 | 0/4 | Planned | - |
 | 5. Labeling Dashboard | v2.0 | 0/? | Not started | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 3 complete (2/2 plans)*
+*Last updated: 2026-04-19 -- Phase 4 planned (4 plans in 2 waves)*
