@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, FileText, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 
@@ -8,9 +8,17 @@ interface LabelingHeaderProps {
   sampleId: string;
   onSave?: () => void;
   isSaving?: boolean;
+  onGeneratePdf?: () => void;
+  isGeneratingPdf?: boolean;
 }
 
-export function LabelingHeader({ sampleId, onSave, isSaving }: LabelingHeaderProps) {
+export function LabelingHeader({
+  sampleId,
+  onSave,
+  isSaving,
+  onGeneratePdf,
+  isGeneratingPdf,
+}: LabelingHeaderProps) {
   const router = useRouter();
 
   return (
@@ -27,6 +35,24 @@ export function LabelingHeader({ sampleId, onSave, isSaving }: LabelingHeaderPro
         Labeling: {sampleId}
       </h1>
       <div className="flex-1" />
+      <Button
+        onClick={onGeneratePdf}
+        disabled={isGeneratingPdf}
+        variant="outline"
+        className="border-zinc-700 text-zinc-300 hover:text-white"
+      >
+        {isGeneratingPdf ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            Generating...
+          </>
+        ) : (
+          <>
+            <FileText className="h-4 w-4 mr-2" />
+            Generate PDF
+          </>
+        )}
+      </Button>
       <Button
         onClick={onSave}
         disabled={isSaving}

@@ -121,6 +121,39 @@ export default function LabelingPage({
 
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [heatmapOpacity, setHeatmapOpacity] = useState(0.5);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  const handleGeneratePdf = async () => {
+    const { panels } = useLabelerStore.getState();
+    if (panels.length === 0) {
+      toast.error("No panels to generate PDF from. Draw and save labels first.");
+      return;
+    }
+    setIsGeneratingPdf(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/pipeline/generate-pdf/${sampleId}`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || "PDF generation failed");
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${sampleId.slice(0, 8)}_cutsheets.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("PDF downloaded!");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "PDF generation failed");
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-screen bg-zinc-950">
@@ -128,6 +161,8 @@ export default function LabelingPage({
         sampleId={sampleId}
         onSave={handleSave}
         isSaving={isSaving}
+        onGeneratePdf={handleGeneratePdf}
+        isGeneratingPdf={isGeneratingPdf}
       />
       <LabelingToolbar
         onSnapPreview={handleSnapPreview}

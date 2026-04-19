@@ -355,3 +355,122 @@ async def get_run_status(
         started_at=row.get("started_at"),
         completed_at=row.get("completed_at"),
     )
+
+
+@router.post("/generate-pdf/{sample_id}")
+async def generate_pdf(
+    sample_id: str,
+    request: Request,
+    supabase: Client = Depends(get_supabase),
+    settings: Settings = Depends(get_settings),
+):
+    """Generate a PDF from saved labels for a sample.
+
+    Reads panel labels from training_labels, downloads DSM from storage,
+    runs the pipeline synchronously, and returns the PDF file.
+    """
+    from fastapi.responses import FileResponse
+    from io import BytesIO
+
+    request.state.sample_id = sample_id
+
+    # 1. Get labels from DB
+    labels_result = (
+        supabase.table("training_labels")
+        .select("annotations")
+        .eq("sample_id", sample_id)
+        .execute()
+    )
+    if not labels_result.data:
+        raise HTTPException(status_code=404, detail="No labels found -- save labels first")
+
+    annotations = labels_result.data[0].get("annotations") or {}
+    panels = annotations.get("panels", [])
+    if not panels:
+        raise HTTPException(status_code=400, detail="Labels have no panels")
+
+    # 2. Get sample info
+    sample_result = (
+        supabase.table("training_samples")
+        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
+        .eq("id", sample_id)
+        .execute()
+    )
+    if not sample_result.data:
+        raise HTTPException(status_code=404, detail="Sample not found")
+
+    sample = sample_result.data[0]
+    dsm_path = sample.get("dsm_storage_path")
+    if not dsm_path:
+        raise HTTPException(status_code=400, detail="Sample has no DSM")
+
+    address = sample.get("formatted_address") or sample.get("source_address") or sample_id
+
+    # 3. Download DSM
+    dsm_bytes = None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
+        try:
+            dsm_bytes = supabase.storage.from_(bucket).download(dsm_path)
+            break
+        except Exception:
+            continue
+    if dsm_bytes is None:
+        raise HTTPException(status_code=404, detail="Could not download DSM from storage")
+
+    # 4. Write panels.json and DSM to temp dir, run pipeline
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+
+        # Write DSM
+        dsm_local = tmp_path / "dsm.tif"
+        dsm_local.write_bytes(dsm_bytes)
+
+        # Write panels.json in PanelsInput format
+        panels_json = tmp_path / "panels.json"
+        panels_json.write_text(json.dumps({"panels": panels}))
+
+        # Create empty mask (pipeline needs it but polygons_from_clicks bypasses it)
+        import rasterio
+
+        with rasterio.open(BytesIO(dsm_bytes)) as ds:
+            mask_arr = np.zeros((ds.height, ds.width), dtype=np.uint8)
+            res_m = abs(ds.res[0]) if ds.res else sample.get("meters_per_px", 0.1)
+
+        mask_local = tmp_path / "mask.npy"
+        np.save(mask_local, mask_arr)
+
+        # Load DSM array
+        dsm_arr, actual_res = _load_dsm(dsm_local)
+
+        out_dir = tmp_path / "output"
+
+        log.info("generating PDF for sample %s (%d panels)", sample_id, len(panels))
+
+        output_paths = await asyncio.to_thread(
+            run_pipeline,
+            dsm_arr,
+            mask_arr,
+            actual_res,
+            out_dir,
+            use_snap_v2=True,
+            panels_json_path=panels_json,
+            project_name=address,
+            project_address=address,
+            estimate_number=sample_id[:8],
+        )
+
+        # Find the cutsheets PDF
+        pdf_path = output_paths.get("cutsheets_pdf")
+        if pdf_path is None or not pdf_path.exists():
+            # Try any PDF in output
+            pdfs = list(out_dir.glob("*.pdf"))
+            pdf_path = pdfs[0] if pdfs else None
+
+        if pdf_path is None or not pdf_path.exists():
+            raise HTTPException(status_code=500, detail="Pipeline ran but no PDF was generated")
+
+        return FileResponse(
+            path=str(pdf_path),
+            media_type="application/pdf",
+            filename=f"{sample_id[:8]}_cutsheets.pdf",
+        )
