@@ -14,10 +14,10 @@ export function MagnetIndicator({ x, y, visible }: MagnetIndicatorProps) {
     <Circle
       x={x}
       y={y}
-      radius={12}
+      radius={4}
       stroke="#facc15"
-      strokeWidth={2}
-      fill="transparent"
+      strokeWidth={1}
+      fill="rgba(250, 204, 21, 0.3)"
       listening={false}
     />
   );

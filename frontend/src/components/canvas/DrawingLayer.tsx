@@ -28,7 +28,7 @@ export function DrawingLayer({ activeDrawing, cursorPosition }: DrawingLayerProp
       <Line
         points={points}
         stroke="#3b82f6"
-        strokeWidth={2}
+        strokeWidth={1}
         closed={false}
         dash={[8, 4]}
         listening={false}
@@ -37,7 +37,7 @@ export function DrawingLayer({ activeDrawing, cursorPosition }: DrawingLayerProp
         <Line
           points={ghostPoints}
           stroke="#3b82f6"
-          strokeWidth={2}
+          strokeWidth={1}
           opacity={0.5}
           listening={false}
         />
@@ -47,7 +47,7 @@ export function DrawingLayer({ activeDrawing, cursorPosition }: DrawingLayerProp
           key={i}
           x={vertex[0]}
           y={vertex[1]}
-          radius={6}
+          radius={3}
           fill="#ffffff"
           listening={false}
         />

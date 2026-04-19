@@ -14,10 +14,10 @@ export function AutoCloseIndicator({ x, y, visible }: AutoCloseIndicatorProps) {
     <Circle
       x={x}
       y={y}
-      radius={10}
+      radius={4}
       stroke="#22c55e"
-      strokeWidth={2}
-      fill="transparent"
+      strokeWidth={1}
+      fill="rgba(34, 197, 94, 0.3)"
       listening={false}
     />
   );
