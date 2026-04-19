@@ -38,6 +38,13 @@ interface LabelerState {
   setIsLoadingPreview: (v: boolean) => void;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare global {
+  interface Window {
+    __labeler_store?: typeof useLabelerStore;
+  }
+}
+
 export const useLabelerStore = create<LabelerState>()(
   temporal(
     (set) => ({
@@ -118,3 +125,8 @@ export const useLabelerStore = create<LabelerState>()(
     },
   ),
 );
+
+// Expose store for Playwright E2E test inspection (dev only)
+if (typeof window !== "undefined") {
+  window.__labeler_store = useLabelerStore;
+}
