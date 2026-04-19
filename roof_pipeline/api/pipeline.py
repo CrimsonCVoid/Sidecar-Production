@@ -221,15 +221,23 @@ async def _run_pipeline_bg(
 
 
 @router.get("/samples")
-async def list_samples(
-    request: Request,
-    supabase: Client = Depends(get_supabase),
-):
+async def list_samples(request: Request):
     """List all samples with their latest pipeline run status (DIDX-01).
 
     Returns each sample joined with the most recent pipeline_runs row
     so the dashboard can show address, panel count, and run status.
+    Gracefully returns an empty list when Supabase credentials are missing.
     """
+    try:
+        settings = Settings()
+    except Exception:
+        log.warning("Supabase credentials not configured -- returning empty samples list")
+        return []
+
+    from supabase import create_client
+
+    supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+
     samples_result = supabase.table("samples").select("*").execute()
     samples = samples_result.data or []
 
