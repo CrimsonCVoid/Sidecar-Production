@@ -72,7 +72,9 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [ ] 03-01-PLAN.md -- Silent duplicate-corner dedup in Pydantic schema + tests (LABEL-01)
-- [ ] 03-02-PLAN.md -- Densify area-loss fix, diagnostic logging, regression test, synthetic multi-hip (FIX-01, FIX-02)
+- [ ] 03-02-PLAN.md -- Densify area-loss investigation, fix, diagnostic logging, fb7e705c regression test (FIX-01, FIX-02)
+
+**Deferred from Phase 3:** `make_synthetic_multi_hip()` in synthetic.py -- a 4-panel synthetic hip doesn't reproduce the multi-neighbor topology (3+ shared edges) that caused panel 8's failure. Revisit broader synthetic coverage in a later milestone.
 
 ### Phase 4: FastAPI Sidecar
 **Goal**: The snap engine and pipeline are accessible over HTTP from the Next.js frontend, with structured server-side logging for production observability
