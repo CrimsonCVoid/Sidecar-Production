@@ -67,6 +67,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-04-19
-Stopped at: Milestone 2 roadmap revised -- 4 phases (3-6) covering 20 requirements
-Resume file: None
+Stopped at: Phase 3 context gathered
+Resume file: .planning/phases/03-bug-fixes/03-CONTEXT.md
 Next action: /gsd-plan-phase 3
