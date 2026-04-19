@@ -89,7 +89,7 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md -- API skeleton: config, deps, middleware, schemas, app factory, stub routers (OBSERVABILITY-01a)
 - [x] 04-02-PLAN.md -- run_real.py refactor: extract run_pipeline() callable (API-02 prerequisite)
-- [ ] 04-03-PLAN.md -- Snap preview endpoint + test infrastructure (API-01, OBSERVABILITY-01a)
+- [x] 04-03-PLAN.md -- Snap preview endpoint + test infrastructure (API-01, OBSERVABILITY-01a)
 - [ ] 04-04-PLAN.md -- Pipeline run + labels endpoints + tests (API-02, API-03)
 
 ### Phase 5: Labeling Dashboard
@@ -129,7 +129,7 @@ Plans:
 | 1. Feature Graph + Clustering | v1.0 | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
-| 4. FastAPI Sidecar | v2.0 | 2/4 | In Progress | - |
+| 4. FastAPI Sidecar | v2.0 | 3/4 | In Progress | - |
 | 5. Labeling Dashboard | v2.0 | 0/? | Not started | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 

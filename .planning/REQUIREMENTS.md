@@ -52,7 +52,7 @@ All 22 requirements delivered. See traceability table below.
 
 ### FastAPI Sidecar
 
-- [ ] **API-01**: POST /snap-preview accepts mask.json, returns feature graph + snapped polygons (<500ms target)
+- [x] **API-01**: POST /snap-preview accepts mask.json, returns feature graph + snapped polygons (<500ms target)
 - [ ] **API-02**: POST /run-pipeline triggers full pipeline run, writes status to Supabase pipeline_runs table
 - [ ] **API-03**: POST/GET /labels/{sampleId} persists and retrieves panel label data via Supabase
 
@@ -133,7 +133,7 @@ All 22 requirements delivered. See traceability table below.
 | FIX-01 | Phase 3 | Not started |
 | FIX-02 | Phase 3 | Not started |
 | LABEL-01 | Phase 3 | Not started |
-| API-01 | Phase 4 | Not started |
+| API-01 | Phase 4 | Complete (04-03) |
 | API-02 | Phase 4 | In progress (04-02: run_pipeline() callable extracted) |
 | API-03 | Phase 4 | Not started |
 | OBSERVABILITY-01a | Phase 4 | Complete (04-01) |
