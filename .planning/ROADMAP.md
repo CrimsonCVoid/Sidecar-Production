@@ -33,7 +33,7 @@
 Plans:
 - [x] 01-01-PLAN.md -- Winding normalization module + TDD test suite (TEST-07)
 - [x] 01-02-PLAN.md -- Three-pass clustering module + TDD test suite (TEST-04)
-- [ ] 01-03-PLAN.md -- Feature graph, public API, --snap-v2-dryrun integration (TEST-05)
+- [x] 01-03-PLAN.md -- Feature graph, public API, --snap-v2-dryrun integration (TEST-05)
 
 ### Phase 2: Apex Solver + Integration
 **Goal**: The complete `panel_snap_v2` engine is wired into `run_real.py` behind `--snap-v2`, solves valence-3+ apices via least-squares plane intersection, densifies shared edges, validates polygons with Shapely, emits `snap_v2_features.json`, passes all 7 correctness tests, and produces bit-for-bit identical output on the gable smoke test
@@ -53,7 +53,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Feature Graph + Clustering | 2/3 | In Progress | - |
+| 1. Feature Graph + Clustering | 3/3 | Executing | - |
 | 2. Apex Solver + Integration | 0/? | Not started | - |
 
 ---
