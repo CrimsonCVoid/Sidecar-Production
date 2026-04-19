@@ -69,7 +69,10 @@ Plans:
   1. Running `run_real.py --snap-v2` on the 12-panel hip-and-valley roof (fb7e705c) completes without error -- panel 8 passes through densify and Shapely validation without area-change rejection
   2. A golden-file regression test for the 12-panel hip-and-valley roof exists and passes in the test suite, confirming the densify fix does not regress
   3. A mask.json file containing duplicate last corners (as produced by the matplotlib labeler's double-click behavior) is loaded via `polygons_from_clicks` and produces the same polygon as the deduplicated version -- no error, no extra zero-length edges
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md -- Silent duplicate-corner dedup in Pydantic schema + tests (LABEL-01)
+- [ ] 03-02-PLAN.md -- Densify area-loss fix, diagnostic logging, regression test, synthetic multi-hip (FIX-01, FIX-02)
 
 ### Phase 4: FastAPI Sidecar
 **Goal**: The snap engine and pipeline are accessible over HTTP from the Next.js frontend, with structured server-side logging for production observability
@@ -118,7 +121,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. Feature Graph + Clustering | v1.0 | 3/3 | Complete | 2026-04-18 |
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
-| 3. Bug Fixes | v2.0 | 0/? | Not started | - |
+| 3. Bug Fixes | v2.0 | 0/2 | In progress | - |
 | 4. FastAPI Sidecar | v2.0 | 0/? | Not started | - |
 | 5. Labeling Dashboard | v2.0 | 0/? | Not started | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
@@ -126,4 +129,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Milestone 2 roadmap revised (Phases 3-6, tests folded into feature phases)*
+*Last updated: 2026-04-19 -- Phase 3 planned (2 plans, 1 wave)*
