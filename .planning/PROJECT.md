@@ -55,6 +55,10 @@ Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-
 - Multi-user concurrent editing — complexity not justified
 - Removing the matplotlib labeler — kept as CLI fallback
 - shop_drawings.py subpackage extraction — flagged by mapper as 2089 lines but deferred
+- Filter chips for sample table (needs review / v2-verified / failed) — deferred to v2.1 polish milestone
+- Side-by-side PDF diff viewer for snap quality comparison — deferred to v2.1 polish milestone
+- Supabase Realtime subscriptions for live run status — deferred to v2.1 (SWR polling sufficient for MVP)
+- Dashboard E2E tests (TESTING-01b) — deferred to v2.1 polish milestone
 
 ## Context
 

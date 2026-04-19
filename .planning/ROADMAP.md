@@ -3,7 +3,7 @@
 ## Milestones
 
 - v1.0 Topology-Aware Snap Engine (Phases 1-2) -- shipped 2026-04-19
-- v2.0 FastAPI Sidecar + Labeling Dashboard (Phases 3-6) -- in progress
+- v2.0 FastAPI Sidecar + Labeling Dashboard (Phases 3-6) -- shipped 2026-04-19
 
 ## Phases
 
@@ -48,14 +48,14 @@ Plans:
 
 </details>
 
-### v2.0 FastAPI Sidecar + Labeling Dashboard (In Progress)
+### v2.0 FastAPI Sidecar + Labeling Dashboard (Shipped 2026-04-19)
 
 **Milestone Goal:** Fix real-data bugs blocking production use, expose snap engine via FastAPI, and build the Next.js labeling dashboard with shared-node magnet, undo/redo, snap preview, plus a dashboard index with sample table, diff viewer, and run monitor.
 
 - [x] **Phase 3: Bug Fixes** - Fix densify area-loss bug and labeler duplicate-corner dedup so the engine is production-safe before API exposure (completed 2026-04-19)
 - [x] **Phase 4: FastAPI Sidecar** - Snap-preview endpoint, pipeline-run trigger, label persistence, and structured server-side logging on existing DigitalOcean droplet (completed 2026-04-19)
 - [x] **Phase 5: Labeling Dashboard** - Next.js Konva canvas with shared-node magnet, undo/redo, snap preview overlay, auto-close, mask.json output, browser-side error capture, and Playwright E2E tests for labeler flows (completed 2026-04-19)
-- [ ] **Phase 6: Dashboard Index + Monitoring** - Sample table, filter chips, diff viewer, Supabase Realtime run monitor, and Playwright E2E tests for dashboard flows
+- [x] **Phase 6: Dashboard Index + Monitoring** - Minimal sample table with status polling via SWR (completed 2026-04-19). Descoped: filter chips, diff viewer, Supabase Realtime, and E2E tests deferred to v2.1 polish milestone.
 
 ---
 
@@ -113,18 +113,17 @@ Plans:
 - [x] 05-05-PLAN.md -- Playwright E2E tests for labeler flows (TESTING-01a)
 **UI hint**: yes
 
-### Phase 6: Dashboard Index + Monitoring
-**Goal**: Users can browse all roof samples, filter by processing status, compare output PDFs side by side, watch pipeline runs complete in real time, with Playwright E2E tests for dashboard flows
+### Phase 6: Dashboard Index + Monitoring (Descoped)
+**Goal**: Minimal sample table with status polling — filter chips, diff viewer, Supabase Realtime, and E2E tests deferred to v2.1
 **Depends on**: Phase 4, Phase 5
-**Requirements**: DIDX-01, DIDX-02, DIDX-03, DIDX-04, TESTING-01b
-**Success Criteria** (what must be TRUE):
-  1. The dashboard index page displays a table of roof samples with address, panel click count, and a snap-status badge (needs review / v2-verified / failed validation) sourced from Supabase
-  2. Clicking filter chips (needs review, v2-verified, failed validation) filters the sample table to show only matching samples -- filters are composable and the active filter state is visible
-  3. Selecting two pipeline runs opens a side-by-side diff viewer showing the before/after PDFs for visual comparison of snap quality changes
-  4. After triggering a pipeline run, the run monitor shows real-time status updates (queued, running, complete, failed) via Supabase Realtime without requiring page refresh
-  5. Playwright E2E tests pass for sample list navigation, run monitor status updates, and diff viewer rendering
-**Plans**: TBD
-**UI hint**: yes
+**Requirements**: DIDX-01 (partial)
+**Delivered**:
+  1. Root page (`/`) displays a shadcn table of roof samples with address, panel count, run status badge (queued/running/complete/failed), link to labeler, and link to PDF
+  2. SWR polls GET /api/pipeline/samples every 3s to refresh run status
+**Deferred to v2.1**: DIDX-02 (filter chips), DIDX-03 (diff viewer), DIDX-04 (Supabase Realtime run monitor), TESTING-01b (dashboard E2E tests)
+**Plans**: 1 plan (inline, no planning docs)
+Plans:
+- [x] Inline — Minimal sample table + SWR polling + GET /api/pipeline/samples endpoint (DIDX-01 partial)
 
 ---
 
@@ -137,9 +136,9 @@ Plans:
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
 | 4. FastAPI Sidecar | v2.0 | 4/4 | Complete | 2026-04-19 |
 | 5. Labeling Dashboard | v2.0 | 5/5 | Complete | 2026-04-19 |
-| 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
+| 6. Dashboard Index (descoped) | v2.0 | 1/1 | Complete | 2026-04-19 |
 
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 5 complete (all 5 plans, Playwright E2E tests passing)*
+*Last updated: 2026-04-19 -- Milestone 2 complete. Phase 6 descoped: filter chips, diff viewer, Supabase Realtime, E2E tests deferred to v2.1.*

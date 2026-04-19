@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-correct point with zero slivers in the output mesh.
-**Current focus:** Phase 5 executing -- labeling dashboard
+**Current focus:** Milestone 2 complete
 
 ## Current Position
 
-Phase: 5 of 6 (Labeling Dashboard) -- COMPLETE
-Plan: 5 of 5 in current phase (all done)
-Status: Phase 5 complete, ready for Phase 6
-Last activity: 2026-04-19 -- Plan 05-05 complete (Playwright E2E tests)
+Phase: 6 of 6 (Dashboard Index + Monitoring) -- COMPLETE (descoped)
+Plan: 1 of 1 in current phase (all done)
+Status: Milestone 2 complete
+Last activity: 2026-04-19 -- Phase 6 complete (descoped -- minimal sample table + polling delivered, filter chips/diff viewer/Realtime/E2E deferred to v2.1)
 
-Progress: [========================================================] 100% (16/16 plans complete through Phase 5)
+Progress: [========================================================] 100% (all phases complete)
 
 ## Performance Metrics
 
@@ -32,6 +32,7 @@ Progress: [========================================================] 100% (16/16
 | 3. Bug Fixes | 2/2 | -- | -- |
 | 4. FastAPI Sidecar | 4/4 | 33min | 8.3min |
 | 5. Labeling Dashboard | 5/5 | 19min | 3.8min |
+| 6. Dashboard Index (descoped) | 1/1 | 2min | 2min |
 
 **Recent Trend:**
 - Milestone 1 completed in 2 phases, 7 plans
@@ -91,6 +92,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-04-19
-Stopped at: Completed 05-05-PLAN.md (Phase 5 complete)
-Resume file: None (Phase 5 done)
-Next action: /gsd-plan-phase 6 or /gsd-execute-phase 6
+Stopped at: Milestone 2 complete (all 6 phases shipped)
+Resume file: None
+Next action: /gsd-complete-milestone
