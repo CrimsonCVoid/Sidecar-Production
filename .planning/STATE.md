@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-correct point with zero slivers in the output mesh.
-**Current focus:** Phase 5 planned -- ready to execute
+**Current focus:** Phase 5 executing -- labeling dashboard
 
 ## Current Position
 
-Phase: 5 of 6 (Labeling Dashboard) -- PLANNED
-Plan: 0 of 5 in current phase
-Status: Ready to execute
-Last activity: 2026-04-19 -- Phase 5 planned (5 plans in 4 waves)
+Phase: 5 of 6 (Labeling Dashboard) -- EXECUTING
+Plan: 1 of 5 in current phase
+Status: Executing (Wave 1 of 4)
+Last activity: 2026-04-19 -- Plan 05-01 complete
 
-Progress: [==============================.............................] 51% (11/16 plans complete, 5 planned)
+Progress: [================================...........................] 56% (12/16 plans complete, 4 remaining)
 
 ## Performance Metrics
 
@@ -31,6 +31,7 @@ Progress: [==============================.............................] 51% (11/
 | 2. Apex Solver + Integration | 4/4 | -- | -- |
 | 3. Bug Fixes | 2/2 | -- | -- |
 | 4. FastAPI Sidecar | 4/4 | 33min | 8.3min |
+| 5. Labeling Dashboard | 1/5 | 6min | 6min |
 
 **Recent Trend:**
 - Milestone 1 completed in 2 phases, 7 plans
@@ -38,7 +39,8 @@ Progress: [==============================.............................] 51% (11/
 - Phase 4 plan 02 completed in 2 min
 - Phase 4 plan 03 completed in 5 min
 - Phase 4 plan 04 completed in 22 min
-- Trend: Stable (plan 04 longer due to dependency installation)
+- Phase 5 plan 01 completed in 6 min
+- Trend: Stable (greenfield frontend scaffold fast despite peer dep resolution)
 
 ## Accumulated Context
 
@@ -60,6 +62,8 @@ Recent decisions affecting current work:
 - [P4-04]: Pipeline background task downloads DSM/mask from Storage, runs via asyncio.to_thread, uploads outputs back
 - [P4-04]: Feature graph stored in snap_features table alongside pipeline_runs for dashboard use
 - [P4-04]: Labels endpoint uses upsert with on_conflict=sample_id for idempotent saves
+- [P5-01]: Used --legacy-peer-deps for react-konva peer dep resolution (react 19.1.0 vs ^19.2.0)
+- [P5-01]: nextPanelId monotonic counter avoids ID reuse after panel deletion (Pitfall 7 mitigated)
 
 ### Pending Todos
 
@@ -75,11 +79,11 @@ Recent decisions affecting current work:
 2. ~~Duplicate last corners in legacy mask.json~~ -- FIXED via strip_close_polygon_duplicate validator
 3. Undo state explosion from drag operations -- requires zundo handleSet + transaction boundaries
 4. Supabase Realtime silent disconnection -- needs reconnection logic
-5. Schema drift between Pydantic and Zod -- define contracts before implementing both sides
+5. ~~Schema drift between Pydantic and Zod~~ -- MITIGATED via source comments in schemas.ts (// Mirrors: path::Class)
 
 ## Session Continuity
 
 Last session: 2026-04-19
-Stopped at: Phase 5 planned (5 plans, 4 waves, verification passed)
-Resume file: .planning/phases/05-labeling-dashboard/05-01-PLAN.md
-Next action: /gsd-execute-phase 5
+Stopped at: Completed 05-01-PLAN.md
+Resume file: .planning/phases/05-labeling-dashboard/05-02-PLAN.md
+Next action: /gsd-execute-phase 5 (plan 02)

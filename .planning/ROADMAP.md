@@ -106,7 +106,7 @@ Plans:
   7. Playwright E2E tests pass for label-save-reload (draw polygons, save, reload, verify persist), undo-redo (draw, undo, redo, verify state), and magnet-snap-override (snap near existing vertex, Shift override)
 **Plans**: 5 plans
 Plans:
-- [ ] 05-01-PLAN.md -- Next.js scaffold, Zod schemas, API client, Zustand store, backend errors endpoint (DASH-01, DASH-05, OBSERVABILITY-01b)
+- [x] 05-01-PLAN.md -- Next.js scaffold, Zod schemas, API client, Zustand store, backend errors endpoint (DASH-01, DASH-05, OBSERVABILITY-01b)
 - [ ] 05-02-PLAN.md -- Konva canvas, polygon drawing, magnet snap, auto-close, panel palette (DASH-01, DASH-02, DASH-06)
 - [ ] 05-03-PLAN.md -- Keyboard shortcuts, undo/redo, LabelingHeader, LabelingToolbar (DASH-03)
 - [ ] 05-04-PLAN.md -- Snap preview overlay, save labels, error capture wiring (DASH-04, DASH-05, OBSERVABILITY-01b)
@@ -136,10 +136,10 @@ Plans:
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
 | 4. FastAPI Sidecar | v2.0 | 4/4 | Complete | 2026-04-19 |
-| 5. Labeling Dashboard | v2.0 | 0/5 | Planning complete | - |
+| 5. Labeling Dashboard | v2.0 | 1/5 | Executing | - |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 5 planned (5 plans in 4 waves)*
+*Last updated: 2026-04-19 -- Phase 5 plan 01 complete (frontend scaffold + API foundation)*

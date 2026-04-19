@@ -58,11 +58,11 @@ All 22 requirements delivered. See traceability table below.
 
 ### Labeling Dashboard
 
-- [ ] **DASH-01**: Per-sample labeling route (`/labeling/[sampleId]`) with Konva canvas on hillshade
+- [x] **DASH-01**: Per-sample labeling route (`/labeling/[sampleId]`) with Konva canvas on hillshade
 - [ ] **DASH-02**: Shared-node magnet (12px snap radius, shift-click override, visual indicator)
 - [ ] **DASH-03**: Undo/redo via Zustand + zundo, Cmd+Z / Cmd+Shift+Z
 - [ ] **DASH-04**: Snap preview mode with valence-colored feature dots
-- [ ] **DASH-05**: Output mask.json compatible with `polygons_from_clicks`
+- [x] **DASH-05**: Output mask.json compatible with `polygons_from_clicks`
 - [ ] **DASH-06**: Auto-close polygon when cursor within 10px of first vertex (prevents duplicate corners)
 
 ### Dashboard Index
@@ -80,7 +80,7 @@ All 22 requirements delivered. See traceability table below.
 ### Observability
 
 - [x] **OBSERVABILITY-01a**: Structured JSON logging for FastAPI sidecar (trace_id, sample_id, endpoint, latency_ms, error_type)
-- [ ] **OBSERVABILITY-01b**: Browser-side error capture to backend logging endpoint or Sentry
+- [x] **OBSERVABILITY-01b**: Browser-side error capture to backend logging endpoint or Sentry
 
 ## Out of Scope
 
@@ -137,13 +137,13 @@ All 22 requirements delivered. See traceability table below.
 | API-02 | Phase 4 | Complete (04-04) |
 | API-03 | Phase 4 | Complete (04-04) |
 | OBSERVABILITY-01a | Phase 4 | Complete (04-01) |
-| DASH-01 | Phase 5 | Not started |
+| DASH-01 | Phase 5 | Complete (05-01) |
 | DASH-02 | Phase 5 | Not started |
 | DASH-03 | Phase 5 | Not started |
 | DASH-04 | Phase 5 | Not started |
-| DASH-05 | Phase 5 | Not started |
+| DASH-05 | Phase 5 | Complete (05-01) |
 | DASH-06 | Phase 5 | Not started |
-| OBSERVABILITY-01b | Phase 5 | Not started |
+| OBSERVABILITY-01b | Phase 5 | Complete (05-01) |
 | TESTING-01a | Phase 5 | Not started |
 | DIDX-01 | Phase 6 | Not started |
 | DIDX-02 | Phase 6 | Not started |
