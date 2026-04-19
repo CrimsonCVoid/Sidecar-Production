@@ -79,7 +79,7 @@ All 22 requirements delivered. See traceability table below.
 
 ### Observability
 
-- [ ] **OBSERVABILITY-01a**: Structured JSON logging for FastAPI sidecar (trace_id, sample_id, endpoint, latency_ms, error_type)
+- [x] **OBSERVABILITY-01a**: Structured JSON logging for FastAPI sidecar (trace_id, sample_id, endpoint, latency_ms, error_type)
 - [ ] **OBSERVABILITY-01b**: Browser-side error capture to backend logging endpoint or Sentry
 
 ## Out of Scope
@@ -136,7 +136,7 @@ All 22 requirements delivered. See traceability table below.
 | API-01 | Phase 4 | Not started |
 | API-02 | Phase 4 | Not started |
 | API-03 | Phase 4 | Not started |
-| OBSERVABILITY-01a | Phase 4 | Not started |
+| OBSERVABILITY-01a | Phase 4 | Complete (04-01) |
 | DASH-01 | Phase 5 | Not started |
 | DASH-02 | Phase 5 | Not started |
 | DASH-03 | Phase 5 | Not started |
