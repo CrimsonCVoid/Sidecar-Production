@@ -101,6 +101,11 @@ def densify_edges(
 
         edge_count += 1
 
+        # D-05 diagnostic counters (reset per graph_edge)
+        candidates_considered = 0
+        edge_insertions = 0
+        insertion_positions: list[tuple[float, float]] = []
+
         # Process both directions: insert B's vertices into A, and
         # A's vertices into B.
         for target_pid, source_pid in [(pid_a, pid_b), (pid_b, pid_a)]:
@@ -124,6 +129,7 @@ def densify_edges(
                 # Find source vertices that project onto this edge
                 insertions: list[tuple[float, np.ndarray]] = []
                 for q in source_poly:
+                    candidates_considered += 1
                     d_xy, t = _point_to_segment_dist_xy(q, p0, p1)
 
                     # Skip near-endpoints (0.05 < t < 0.95)
@@ -169,8 +175,21 @@ def densify_edges(
                 for _, p in kept:
                     new_verts.append(p)
                     insert_count += 1
+                    edge_insertions += 1
+                    insertion_positions.append((float(p[0]), float(p[1])))
 
             out[target_pid] = np.array(new_verts)
+
+        # D-05: per-shared-edge diagnostic log
+        log.debug(
+            "densify edge panel_a=%d panel_b=%d "
+            "candidates_considered=%d vertices_inserted=%d "
+            "insertion_positions_xy=%s",
+            pid_a, pid_b,
+            candidates_considered,
+            edge_insertions,
+            insertion_positions,
+        )
 
     # ------------------------------------------------------------------
     # 3. Summary log.

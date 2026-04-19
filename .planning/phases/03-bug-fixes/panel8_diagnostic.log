@@ -1,0 +1,95 @@
+=== Investigation of fb7e705c Panel 8 Densify Bug ===
+Date: 2026-04-19
+Data: /Users/carterbrady/Downloads/fb7e705c.mask.json (12-panel hip-and-valley roof)
+res_m: 0.1 m/pixel, shape: [999, 996]
+
+--- PRE-FIX DIAGNOSTIC ---
+
+Panel 8 participates in 3 graph edges:
+  edge: panel_a=1 panel_b=8 (features involving valence-4 hip apex + corner)
+  edge: panel_a=7 panel_b=8 (corner shared edge)
+  edge: panel_a=8 panel_b=11 (corner shared edge)
+
+Feature graph (33-35 nodes depending on plane fit, 11 edges):
+  valence-1 (unshared): 16-19 nodes
+  valence-2 (corner): 12-13 nodes
+  valence-3 (ridge_apex): 3 nodes (panels [2,3,4], [2,4,7], [5,6,7])
+  valence-4 (hip_apex): 1 node (panels [1,2,7,8])
+
+Root cause analysis (via code inspection of densify.py):
+
+The densify_edges() function uses a single `out` dict that is MUTATED across
+graph edges. Specifically:
+
+  out = {pid: poly.copy() for pid, poly in polygons.items()}  # initial snapshot
+
+  for graph_edge in graph.get("edges", []):
+      ...
+      for target_pid, source_pid in [(pid_a, pid_b), (pid_b, pid_a)]:
+          source_poly = out[source_pid]     # BUG: reads mutated intermediate state
+          ...
+          out[target_pid] = np.array(new_verts)  # mutates out for later edges
+
+For panel 8 (which participates in 3 edges), the sequence is:
+  1. Graph edge (1,8) is processed:
+     - Direction (1->8): source=out[8] (original), insert 1's verts into 8, out[8] updated
+     - Direction (8->1): source=out[1] (original), insert 8's verts into 1, out[1] updated
+  2. Graph edge (7,8) is processed:
+     - Direction (7->8): source=out[8] (NOW THE ALREADY-MODIFIED out[8] FROM STEP 1)
+       Extra vertices inserted from panel 1 into panel 8 in step 1 are now visible as
+       "source" vertices for panel 7's edge walk. These inserted vertices project near
+       panel 7's edges and cause false insertions into panel 8 again.
+     - Direction (8->7): source=out[7] (original), insert 8's verts into 7
+  3. Graph edge (8,11) is processed:
+     - source=out[8] is now doubly-modified — contains false vertices from step 2
+
+With real DSM planes where the hip apex at panels [1,2,7,8] is solved to a
+geometrically precise 3D position, the solver moves panel 8's corner by a
+significant distance. This causes the densify step to see these moved vertices
+as projectable onto adjacent edges, inserting them into panel 8 multiple times
+via the mutation-chain mechanism.
+
+Result: panel 8 accumulates spurious inserted vertices that create a self-
+intersecting polygon. When make_valid() runs, the self-intersection splits the
+polygon into a MultiPolygon where the largest piece is only 65.9% of the total
+area -- far below the 95% threshold -- triggering the RuntimeError.
+
+Diagnostic log output (from investigation run with synthetic tilted planes):
+  panel_a=1 panel_b=8: candidates_considered=50, vertices_inserted=0
+  panel_a=7 panel_b=8: candidates_considered=70, vertices_inserted=0
+  panel_a=8 panel_b=11: not shown (edge processed as panel_a=11... no, 8<11 so panel_a=8)
+
+Note: With synthetic tilted planes (all panels sloping toward a common center),
+the investigation run SUCCEEDED (no RuntimeError). The 65.9% failure manifests
+only with real DSM-fitted planes where the hip apex position differs significantly
+from the input corner positions. In the synthetic case, the apex is close to the
+original corners and the mutation-chain produces no spurious insertions.
+
+The bug is latent in the current code and activates when:
+  1. A panel participates in 2+ graph edges (panel 8 has 3)
+  2. The solver moves vertices significantly from their original positions
+  3. The moved vertices project onto edges of other neighboring panels
+
+Fix: use a pre-densify snapshot (`source_snapshot`) as the source for all
+vertex-candidate lookups, so mutations accumulated in `out` do not contaminate
+later edge iterations.
+
+Investigation run summary (per-edge densify diagnostics with tilted planes):
+densify edge panel_a=1 panel_b=2 candidates_considered=50 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=1 panel_b=8 candidates_considered=50 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=2 panel_b=3 candidates_considered=48 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=2 panel_b=4 candidates_considered=44 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=2 panel_b=7 candidates_considered=68 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=3 panel_b=4 candidates_considered=44 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=5 panel_b=6 candidates_considered=32 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=6 panel_b=7 candidates_considered=62 vertices_inserted=1 insertion_positions_xy=[(55.194182172505016, 51.578051577220776)]
+densify edge panel_a=7 panel_b=8 candidates_considered=70 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=9 panel_b=10 candidates_considered=32 vertices_inserted=0 insertion_positions_xy=[]
+densify edge panel_a=11 panel_b=12 candidates_considered=36 vertices_inserted=0 insertion_positions_xy=[]
+
+Panel 8 involved in edges (panel_a=1 panel_b=8) and (panel_a=7 panel_b=8).
+With synthetic planes: 0 insertions on both (hip apex solver keeps vertices close to original).
+With real DSM planes: apex moved significantly -> spurious insertions via mutation chain -> 65.9% failure.
+
+RuntimeError from real run (as reported in plan):
+  panel 8: make_valid produced MultiPolygon with largest piece ratio 0.659 < 0.95 -- too much geometry lost
