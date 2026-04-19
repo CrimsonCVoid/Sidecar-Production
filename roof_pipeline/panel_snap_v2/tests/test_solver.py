@@ -122,23 +122,30 @@ class TestRidgeWeld:
 class TestValence2:
     """TOPO-05: Valence-2 uses XY centroid + per-plane Z reconstruction."""
 
+    @staticmethod
+    def _find_nearest_vertex(polygon, xy_target):
+        """Find index of vertex closest in XY to xy_target."""
+        dists = np.linalg.norm(polygon[:, :2] - xy_target, axis=1)
+        return int(np.argmin(dists))
+
     def test_valence2_xy_centroid_per_plane_z(self):
         """2 panels sharing a corner with different planes.
 
         After solving, the shared XY is the centroid of the two original XY
         positions and each panel gets its own Z from its plane equation.
         """
-        # Panel 1: tilted 30 degrees, shared corner near (1, 1, z1)
-        # Panel 2: tilted 45 degrees, shared corner near (1.05, 1.02, z2)
-        # Within tol=0.5, these should cluster.
+        # Two panels sharing a corner. Shared vertices must be close in
+        # full 3D (within tol) to cluster. We use different plane normals
+        # to get different Z values at the solved XY centroid.
         p1_shared = np.array([1.0, 1.0, 5.0])
-        p1_other1 = np.array([3.0, 1.0, 4.0])
-        p1_other2 = np.array([2.0, 3.0, 4.5])
+        p1_other1 = np.array([3.0, 1.0, 5.0])
+        p1_other2 = np.array([2.0, 3.0, 5.0])
         poly1 = np.array([p1_shared, p1_other1, p1_other2])
 
-        p2_shared = np.array([1.05, 1.02, 7.0])
-        p2_other1 = np.array([-1.0, 1.0, 6.0])
-        p2_other2 = np.array([0.0, 3.0, 6.5])
+        # Shared vertex within tol=0.5 in 3D
+        p2_shared = np.array([1.05, 1.02, 5.01])
+        p2_other1 = np.array([-1.0, 1.0, 5.0])
+        p2_other2 = np.array([0.0, 3.0, 5.0])
         poly2 = np.array([p2_shared, p2_other1, p2_other2])
 
         # Build planes with distinct normals
@@ -164,21 +171,23 @@ class TestValence2:
         # Expected XY centroid of the two original positions
         expected_x = (1.0 + 1.05) / 2.0
         expected_y = (1.0 + 1.02) / 2.0
+        expected_xy = np.array([expected_x, expected_y])
 
-        # Panel 1 should have XY = centroid, Z from plane1
-        out1 = polygons_out[1][0]
-        assert abs(out1[0] - expected_x) < 1e-9, f"Panel 1 X: {out1[0]} != {expected_x}"
-        assert abs(out1[1] - expected_y) < 1e-9, f"Panel 1 Y: {out1[1]} != {expected_y}"
+        # Find the solved vertex in each output polygon closest to expected XY
+        idx1 = self._find_nearest_vertex(polygons_out[1], expected_xy)
+        idx2 = self._find_nearest_vertex(polygons_out[2], expected_xy)
 
-        # Panel 2 should have XY = same centroid, Z from plane2
-        out2 = polygons_out[2][0]
-        assert abs(out2[0] - expected_x) < 1e-9, f"Panel 2 X: {out2[0]} != {expected_x}"
-        assert abs(out2[1] - expected_y) < 1e-9, f"Panel 2 Y: {out2[1]} != {expected_y}"
+        out1 = polygons_out[1][idx1]
+        out2 = polygons_out[2][idx2]
+
+        # XY should match centroid
+        np.testing.assert_allclose(out1[:2], expected_xy, atol=1e-9)
+        np.testing.assert_allclose(out2[:2], expected_xy, atol=1e-9)
 
         # XY should be identical between both panels
         np.testing.assert_allclose(out1[:2], out2[:2], atol=1e-9)
 
-        # Z should differ (different planes)
+        # Z should differ (different planes reconstruct different Z)
         assert abs(out1[2] - out2[2]) > 0.01, (
             f"Panel Z values should differ: {out1[2]} vs {out2[2]}"
         )
@@ -189,21 +198,26 @@ class TestConditionNumberFallback:
 
     def test_cond_warn_fallback(self, caplog):
         """3 near-parallel planes (cond > 1e8) fall back to centroid."""
-        # 3 panels meeting at a point, but planes are nearly parallel
-        # (normals differ by ~0.001 radians)
+        # 3 non-degenerate triangles sharing an apex, with each panel
+        # assigned a near-parallel plane (normals differ by ~0.001 rad).
+        # Triangles go around the apex in 120-degree sectors so each
+        # panel has non-collinear vertices in the plane's 2D projection.
         apex = np.array([0.0, 0.0, 5.0])
-        v1 = np.array([2.0, 0.0, 5.0])
-        v2 = np.array([0.0, 2.0, 5.0])
-        v3 = np.array([-2.0, 0.0, 5.0])
+        # 3 base vertices at 120-degree intervals, radius=2
+        angles = [0.0, 2 * np.pi / 3, 4 * np.pi / 3]
+        bases = [
+            np.array([2 * np.cos(a), 2 * np.sin(a), 5.0]) for a in angles
+        ]
+        # Each panel: apex + two adjacent base vertices
+        poly1 = np.array([apex, bases[0], bases[1]])
+        poly2 = np.array([apex, bases[1], bases[2]])
+        poly3 = np.array([apex, bases[2], bases[0]])
 
-        poly1 = np.array([apex, v1, v2])
-        poly2 = np.array([apex, v2, v3])
-        poly3 = np.array([apex, v3, v1])
-
-        # Near-parallel planes: normals differ by tiny amounts
+        # Near-parallel planes: eps=1e-8 gives cond ~3e8 (> 1e8 but < 1e12)
+        eps = 1e-8
         plane1 = _make_plane(normal=[0.0, 0.0, 1.0], centroid=apex)
-        plane2 = _make_plane(normal=[0.001, 0.0, 0.9999995], centroid=apex)
-        plane3 = _make_plane(normal=[0.0, 0.001, 0.9999995], centroid=apex)
+        plane2 = _make_plane(normal=[eps, 0.0, 1.0], centroid=apex)
+        plane3 = _make_plane(normal=[0.0, eps, 1.0], centroid=apex)
 
         polygons = {1: poly1, 2: poly2, 3: poly3}
         planes = {1: plane1, 2: plane2, 3: plane3}
@@ -229,15 +243,16 @@ class TestConditionNumberHardFail:
 
     def test_cond_fail_hard(self):
         """3 truly parallel planes (cond > 1e12) raise RuntimeError."""
-        # 3 panels meeting at a point, but all planes are exactly parallel
+        # 3 non-degenerate triangles sharing an apex, with each panel
+        # assigned a truly parallel plane (all normal=[0,0,1], different d).
         apex = np.array([0.0, 0.0, 5.0])
-        v1 = np.array([2.0, 0.0, 5.0])
-        v2 = np.array([0.0, 2.0, 5.0])
-        v3 = np.array([-2.0, 0.0, 5.0])
-
-        poly1 = np.array([apex, v1, v2])
-        poly2 = np.array([apex, v2, v3])
-        poly3 = np.array([apex, v3, v1])
+        angles = [0.0, 2 * np.pi / 3, 4 * np.pi / 3]
+        bases = [
+            np.array([2 * np.cos(a), 2 * np.sin(a), 5.0]) for a in angles
+        ]
+        poly1 = np.array([apex, bases[0], bases[1]])
+        poly2 = np.array([apex, bases[1], bases[2]])
+        poly3 = np.array([apex, bases[2], bases[0]])
 
         # Truly parallel planes -- all normal=[0,0,1] but different d values
         plane1 = Plane(
