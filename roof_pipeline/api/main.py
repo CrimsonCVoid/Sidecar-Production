@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import Settings
+from .errors import router as errors_router
 from .labels import router as labels_router
 from .middleware import configure_logging, structured_logging_middleware
 from .pipeline import router as pipeline_router
@@ -72,6 +73,7 @@ async def logging_middleware(request: Request, call_next):
 app.include_router(snap_router, prefix="/api/snap", tags=["snap"])
 app.include_router(pipeline_router, prefix="/api/pipeline", tags=["pipeline"])
 app.include_router(labels_router, prefix="/api/labels", tags=["labels"])
+app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 
 
 # ---------------------------------------------------------------------------
