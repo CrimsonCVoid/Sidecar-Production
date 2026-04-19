@@ -1,159 +1,242 @@
-# Technology Stack
+# Technology Stack -- Milestone 2
 
-**Project:** Topology-Aware Snap Engine + Web Labeling Dashboard
+**Project:** FastAPI Sidecar + Labeling Dashboard (Milestone 2 of 2)
 **Researched:** 2026-04-18
+**Updated:** 2026-04-19 (Milestone 2 focus -- Milestone 1 complete, 41 tests passing)
 
-## Recommended Stack
+## Context
 
-This stack adds two capabilities to the existing Python pipeline and Next.js SaaS app: (1) a topology-aware polygon snap engine with union-find clustering and multi-plane apex solving, and (2) a canvas-based labeling dashboard with shared-node magnets, undo/redo, and real-time pipeline monitoring. No existing dependencies are replaced.
+Milestone 1 delivered the `panel_snap_v2` topology-aware snap engine with union-find clustering, feature graph, apex solver, densify, and validate -- all integrated behind `--snap-v2` in `run_real.py`. The engine uses only existing Python deps (scipy, numpy, shapely). Pydantic was added for input validation at the `polygons_from_clicks` boundary.
+
+This document covers ONLY the stack additions needed for Milestone 2: the FastAPI sidecar, the Next.js Konva labeling dashboard, and the Supabase Realtime run monitor. Nothing from Milestone 1's validated stack is repeated here.
 
 ---
 
-### Python Backend -- Snap Engine (panel_snap_v2)
+## Python Backend -- FastAPI Sidecar
 
-All additions below are zero-new-dependency. The project constraint says "No new deps in the pipeline module (shapely and scipy already present)." Every recommendation here uses numpy, scipy, or shapely -- already in `requirements.txt`.
+### Core Dependencies
 
-| Technology | Version | Purpose | Why | Confidence |
-|------------|---------|---------|-----|------------|
-| `scipy.cluster.hierarchy.DisjointSet` | scipy >= 1.11 (already pinned) | Union-find for vertex clustering | SciPy's built-in DisjointSet uses path-halving find + merge-by-size. Zero dependencies to add. API: `ds.merge(a, b)`, `ds[x]` for find, `ds.connected(a, b)`, `ds.subsets()`. Introduced in SciPy 1.6, stable through current 1.17.x. Custom union-find would duplicate this. | HIGH |
-| `numpy.linalg.lstsq` | numpy >= 1.26 (already pinned) | Least-squares multi-plane apex solving | For valence-3+ apex points where 3+ roof planes meet. Build matrix A of plane normals [n1; n2; n3; ...] and vector b of plane offsets [d1; d2; d3; ...], solve `lstsq(A, b)` for the apex point. Returns residuals for quality check. Uses LAPACK GELSD internally. For exactly 3 planes, `numpy.linalg.solve(A, b)` is a direct 3x3 solve (cheaper, exact). Use `lstsq` for valence 4+ where the system is overdetermined. | HIGH |
-| `numpy.cross` | numpy >= 1.26 | 3-plane intersection closed-form | For exactly 3 planes (the common hip apex case), use the closed-form: `p = (d1*(n2 x n3) + d2*(n3 x n1) + d3*(n1 x n2)) / det([n1; n2; n3])`. Faster than lstsq, no iterative solver overhead. Fall back to lstsq at valence 4+. | HIGH |
-| `shapely.validation.make_valid` | shapely >= 2.0 (already pinned) | Polygon repair after snapping | `make_valid(polygon)` fixes self-intersections, collapses, and ring ordering. Replaces the `buffer(0)` trick which can erode thin slivers. Available since Shapely 2.0. Current stable: 2.1.2. | HIGH |
-| `shapely.ops.snap` | shapely >= 2.0 | Geometric vertex snapping | `snap(geom, reference, tolerance)` snaps vertices of one geometry to another within tolerance. Useful for edge-walking densification where shared edges need identical vertex sequences. | HIGH |
-| `shapely.ops.unary_union` | shapely >= 2.0 | Validation of zero-gap mesh | After snapping, `unary_union(all_polygons)` should produce a single polygon with no interior gaps. If the result has interior rings, there are slivers. Diagnostic tool, not a fix. | HIGH |
-| `scipy.spatial.KDTree` | scipy >= 1.11 | Spatial indexing for vertex proximity | For the 3-pass expanding tolerance (0.3t, 0.6t, t), query `KDTree.query_ball_point(vertex, radius)` to find neighbors. O(N log N) build, O(log N) per query. Already in scipy -- no new dep. Better than O(N^2) pairwise distance. | HIGH |
+| Technology | Version | Purpose | Rationale | Confidence |
+|------------|---------|---------|-----------|------------|
+| FastAPI | >=0.115,<1.0 | HTTP endpoint for snap-preview, run-pipeline, diff | Async, auto-OpenAPI, native Pydantic v2 validation. Python 3.10+ required since 0.130.0 -- project uses 3.11, fully compatible. Current stable: 0.136.0 (released 2026-04-16). Pin >=0.115 to stay below the 0.130 Python-version bump while accepting bugfixes. | HIGH |
+| uvicorn | >=0.30,<1.0 | ASGI server | Standard FastAPI server. Run as `uvicorn roof_pipeline.api.app:app --host 0.0.0.0 --port 8000`. Current stable: 0.44.0. Pin >=0.30 for stability. Included in `fastapi[standard]` extras but pin explicitly for clarity. | HIGH |
+| Pydantic | >=2.0,<3.0 | Request/response validation | Already in `requirements.txt` from Milestone 1 (added for `polygons_from_clicks` boundary). FastAPI 0.115+ requires Pydantic v2. Reuse the existing `MaskContract` schema for the `/snap-preview` request body. No version change needed. | HIGH |
+| supabase | >=2.0,<3.0 | Pipeline status writes to Supabase | FastAPI sidecar writes pipeline_runs status rows (`INSERT`/`UPDATE`) so the dashboard's Realtime subscription picks them up. The `supabase` Python client (supabase-py) provides `client.table("pipeline_runs").insert(...)` and `.update(...).eq("id", run_id)` for async writes. Current stable: 2.28.3 (released 2026-03-20). Uses `postgrest-py` under the hood. Do NOT use raw `psycopg2` -- the Supabase client handles auth, RLS, and connection pooling. | HIGH |
+| python-multipart | >=0.0.18 | Form/file upload parsing | Transitive FastAPI dependency required for `UploadFile` and `Form` parameters. Not needed if all endpoints accept JSON bodies only (which is the current plan). Installed automatically with `pip install fastapi` but listed here for awareness. Upgraded to >=0.0.18 to fix CVE-2024-56406 (DoS via many small multipart fields). Current: 0.0.26. | MEDIUM |
+| httpx | >=0.27,<1.0 | FastAPI test client | FastAPI's `TestClient` is built on httpx. Required for `pytest` testing of API routes. Not a runtime dependency -- dev/test only. Current stable: 0.28.1. | HIGH |
 
-**NOT recommended for the snap engine:**
+### What NOT to add to the sidecar
 
 | Technology | Why Not |
 |------------|---------|
-| `scipy.optimize.least_squares` (nonlinear) | Overkill. Plane intersection is a *linear* system. `numpy.linalg.lstsq` solves it directly. Nonlinear LS adds Jacobian complexity for no benefit here. |
-| `scipy.linalg.lstsq` (vs numpy) | Functionally identical for this use case. `numpy.linalg.lstsq` is already imported throughout the codebase (planes.py uses numpy SVD). Don't mix scipy and numpy linalg for the same operation. |
-| NetworkX for feature graph | NetworkX 3.6 would add ~2MB of dependency for what is fundamentally a `dict[int, set[int]]` adjacency list with ~20-50 nodes. The feature graph here has at most a few dozen panels. Write a simple `FeatureGraph` dataclass with `add_edge`, `neighbors`, `degree` methods. Export to JSON directly. |
-| Custom union-find implementation | SciPy's `DisjointSet` already has path-halving + merge-by-size. Writing your own is a bug magnet for the weighted/path-compressed invariants. |
-| CGAL Python bindings | Massive C++ dependency, poor pip installability, overkill for 2D polygon operations that Shapely handles natively via GEOS. |
+| `celery` / `redis` | Overkill for current scale (1-50 samples/day). FastAPI's built-in `BackgroundTasks` handles the pipeline run in-process. Add Celery only if concurrent pipeline runs are needed later. |
+| `psycopg2` / `asyncpg` | Direct Postgres connections bypass Supabase's auth and RLS. Use the `supabase` Python client instead. |
+| `aiofiles` | DSM files are loaded via `rasterio.open()` which is synchronous. Wrapping in async adds complexity for no benefit -- the snap-preview endpoint should use `functools.lru_cache` on DSM loading instead. |
+| `gunicorn` | uvicorn alone handles the expected load. Gunicorn + uvicorn workers is needed at scale but adds deployment complexity now. Single uvicorn process with 2 workers (`--workers 2`) is sufficient. |
+| `WebSocket` server in FastAPI | The sidecar does NOT manage WebSocket connections. Pipeline progress goes through Supabase table writes -> Supabase Realtime -> dashboard. This is the key architectural decision: Supabase is the pub-sub bridge. |
 
-### API Sidecar (FastAPI)
+### FastAPI-Specific Patterns
 
-| Technology | Version | Purpose | Why | Confidence |
-|------------|---------|---------|-----|------------|
-| FastAPI | >= 0.115 | Snap-preview HTTP endpoint | Already planned for the existing DigitalOcean droplet. Lightweight, async, auto-generates OpenAPI spec. Current stable: ~0.135.x. Pin >= 0.115 for stability. Requires Python 3.10+ after 0.130.0, but the project uses 3.11 already. | HIGH |
-| Pydantic v2 | >= 2.10 | Request/response schema validation | FastAPI's native validator. Use for the `polygons_from_clicks` contract boundary, snap-preview request body, and `snap_v2_features.json` schema. Current stable: 2.13.2. Already a transitive FastAPI dep. | HIGH |
-| uvicorn | >= 0.30 | ASGI server | Standard FastAPI runner. `uvicorn snap_api:app --host 0.0.0.0 --port 8000`. Already standard in the FastAPI ecosystem. | HIGH |
+**CORS middleware** -- Required because the Next.js dashboard (Vercel or localhost:3000) calls the FastAPI sidecar (DigitalOcean droplet:8000). Configure in `app.py`:
 
-### Testing
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
-| Technology | Version | Purpose | Why | Confidence |
-|------------|---------|---------|-----|------------|
-| pytest | >= 8.0 | Test runner for panel_snap_v2 | No test framework currently configured. pytest is the Python standard. Current stable: 9.0.3. Required for the 7 specific correctness tests specified in PROJECT.md. | HIGH |
-| pytest-cov | >= 5.0 | Coverage reporting | Ensures the 7 snap tests cover the critical paths (winding normalization, apex merge, transitive cluster). | MEDIUM |
+app = FastAPI(title="Roof Pipeline API", version="0.1.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://mymetalroofer.com", "http://localhost:3000"],
+    allow_methods=["POST"],
+    allow_headers=["*"],
+)
+```
+
+**BackgroundTasks** -- The `/run-pipeline` endpoint must return immediately (HTTP 202 Accepted) and run the pipeline in the background. FastAPI's `BackgroundTasks` handles this without Celery:
+
+```python
+from fastapi import BackgroundTasks
+
+@router.post("/run-pipeline", status_code=202)
+async def run_pipeline(req: RunPipelineRequest, bg: BackgroundTasks):
+    bg.add_task(execute_pipeline, req.sample_id, req.snap_tol)
+    return {"status": "accepted", "sample_id": req.sample_id}
+```
+
+**Sync endpoints** -- The `/snap-preview` endpoint runs synchronously (<500ms target). FastAPI runs `def` (non-async) route functions in a threadpool, which is fine for CPU-bound numpy/scipy operations. Do NOT make the snap engine async -- it is pure computation.
 
 ---
 
-### Frontend -- Labeling Dashboard
+## Frontend -- Labeling Dashboard
 
-The existing app is Next.js + Supabase + TypeScript. These additions integrate into that stack.
+The existing My Metal Roofer app is Next.js App Router + Supabase + TypeScript. These are the additions for Milestone 2.
 
-| Technology | Version | Purpose | Why | Confidence |
-|------------|---------|---------|-----|------------|
-| Konva | 10.x | 2D canvas rendering engine | Scene-graph architecture with automatic dirty-region repainting. Hierarchical node model (Stage > Layer > Group > Shape) maps directly to the roof domain model (Canvas > PanelLayer > Panel > Vertex). Proactive memory management for long-running labeling sessions. 1100+ downstream npm dependents. Current: 10.2.5. | HIGH |
-| react-konva | 19.x | React bindings for Konva | Declarative `<Stage>`, `<Layer>`, `<Line>`, `<Circle>` JSX components. Full event system (onClick, onDragMove, onMouseEnter). Integrates with React 18/19 concurrent mode. Current: 19.2.3. | HIGH |
-| Zustand | 5.x | Client state management | Minimal store (~1KB) with zero boilerplate. Hook-based: `const panels = useStore(s => s.panels)`. No providers/context wrappers needed. Selector-based renders prevent full canvas re-renders when unrelated state changes. Current: 5.0.11. | HIGH |
-| zundo | 2.x | Undo/redo middleware for Zustand | `temporal()` middleware wraps the store. Exposes `undo()`, `redo()`, `clear()`, `pastStates`, `futureStates`. Under 700 bytes. `partialize` option to track only polygon state (exclude UI ephemeral state like hover, zoom). `limit: 100` caps memory. Current: 2.3.0. | HIGH |
-| @supabase/supabase-js | 2.x | Realtime pipeline monitoring | Postgres Changes subscription: `supabase.channel('runs').on('postgres_changes', { event: '*', schema: 'public', table: 'pipeline_runs' }, handler).subscribe()`. Filter with `filter: 'sample_id=eq.abc'`. Broadcast for ephemeral notifications. Existing project dependency. Current: 2.103.2. | HIGH |
-| Zod | >= 3.22 | API boundary validation | Already required by project constraints ("Zod at every API boundary"). Validate FastAPI responses on the client side. Validate `mask.json` shape before POST. | HIGH |
+### Core Dependencies
 
-**NOT recommended for the frontend:**
+| Technology | Version | Purpose | Rationale | Confidence |
+|------------|---------|---------|-----------|------------|
+| konva | ^10.2 | 2D canvas rendering engine | Scene-graph architecture (Stage > Layer > Group > Shape) maps directly to the roof domain (Canvas > PanelLayer > Panel > Vertex). Dirty-region repainting for performance. Built-in hit detection via color-picking canvas. 1100+ npm dependents. Current: 10.2.5. Ships its own TypeScript types. | HIGH |
+| react-konva | ^19.2 | React bindings for Konva | Declarative JSX: `<Stage>`, `<Layer>`, `<Line>`, `<Circle>`. Full event system (`onClick`, `onDragMove`, `onDragEnd`). Peer-depends on `konva` and `react`. Compatible with React 18 and 19. Current: 19.2.3. | HIGH |
+| zustand | ^5.0 | Client state management | Minimal (~1KB), zero-boilerplate hook-based store. `const panels = useStore(s => s.panels)` with selector-based rendering prevents unnecessary Konva redraws when unrelated state changes. No Provider/Context wrappers. Current: 5.0.11. | HIGH |
+| zundo | ^2.3 | Undo/redo middleware for Zustand | `temporal()` middleware wrapping the store. Exposes `undo()`, `redo()`, `clear()`, `pastStates`, `futureStates`. Under 700 bytes gzipped. Key options for this project: `partialize` (track only polygon state, exclude UI ephemeral state), `limit: 100` (cap memory), `handleSet` (disable tracking during drag operations to prevent state explosion). Current: 2.3.0. Requires Zustand v4.2+ or v5. | HIGH |
+
+### Already in the project (verify versions)
+
+| Technology | Expected Version | Purpose | Notes |
+|------------|-----------------|---------|-------|
+| @supabase/supabase-js | ^2.100 | Supabase client for Realtime, Storage, DB queries | Realtime `postgres_changes` subscription for run monitor. `supabase.channel('runs').on('postgres_changes', { event: '*', schema: 'public', table: 'pipeline_runs' }, handler).subscribe()`. Current: 2.103.2. |
+| zod | >=3.22 | API boundary validation | Project constraint: "Zod at every API boundary." Validate FastAPI responses on client. Validate mask.json before POST. |
+| next | (existing) | App router framework | No version change needed for Milestone 2. |
+| typescript | (existing) | Type safety | No `any` per project constraints. |
+
+### What NOT to add to the frontend
 
 | Technology | Why Not |
 |------------|---------|
-| Fabric.js | Flat object model requires manual memory cleanup for long-running apps. No built-in scene graph hierarchy (Stage/Layer/Group). React integration is community-maintained (`react-fabricjs`) vs Konva's official `react-konva`. Fabric uses SVG-based rendering internally which is slower for the many-polygon redraws needed during drag-snap operations. Fabric's sweet spot is image editing (filters, crops), not interactive polygon topology editing. |
-| Pixi.js | WebGL-first renderer. Overkill for 2D polygon editing with ~20-50 shapes. WebGL context management adds complexity. No built-in React wrapper of Konva's maturity. Better for games/particles, not geometric annotation. |
-| SVG (raw or react-svg-draw) | DOM-based rendering. Each polygon vertex is a DOM node. At 50+ panels with 4-8 vertices each = 200-400 DOM nodes being hit-tested on every mouse move for snap detection. Canvas (Konva) does this in a single composited layer with O(1) hit detection via color picking. |
-| Redux / Redux Toolkit | 3-5x more boilerplate than Zustand for the same undo/redo pattern. `createSlice` + `configureStore` + `Provider` + selectors vs. Zustand's single `create()` call. No benefit for a single-page labeling tool with one store. |
-| Jotai / Valtio | Both are fine state managers, but Zustand has the temporal middleware ecosystem (zundo) purpose-built for undo/redo. Jotai's atom model fragments polygon state across many atoms, making undo across multiple panels harder. Valtio's proxy model can cause subtle mutation bugs in geometry arrays. |
-| Socket.io for monitoring | Adds a second real-time transport alongside Supabase Realtime. The project already has Supabase. Using Postgres Changes means the pipeline writes to a `pipeline_runs` table and the dashboard subscribes automatically -- no separate WebSocket server needed. |
+| Fabric.js | Flat object model (no scene graph). Manual memory cleanup required for long-running sessions. React integration is community-maintained (`react-fabricjs`) vs Konva's official `react-konva`. SVG-based rendering under the hood is slower than Canvas for many-polygon redraws during drag-snap. Fabric's strength is image editing, not topology editing. |
+| Pixi.js | WebGL renderer. Overkill for 2D polygon editing with ~20-50 shapes. WebGL context management adds complexity. No React wrapper at Konva's maturity level. |
+| Raw Canvas 2D / SVG | No hit detection, no scene graph, no event system. SVG creates one DOM node per vertex -- 200-400 DOM nodes at 50 panels causes hit-test overhead on every mousemove. Konva does hit detection via a hidden color-picking canvas in O(1). |
+| Redux / Redux Toolkit | 3-5x more boilerplate than Zustand. `createSlice` + `configureStore` + `Provider` vs Zustand's single `create()`. No benefit for single-page labeling with one store. |
+| Jotai | Atom-per-vertex model fragments polygon state, making undo across multiple panels harder than Zustand's single-store snapshot. |
+| Valtio | Proxy-based mutations on geometry arrays cause subtle bugs (array identity changes not detected by Konva's shallow comparison). |
+| Socket.io | Adds a second real-time transport alongside Supabase Realtime. Supabase already handles pub-sub via Postgres Changes. No reason to run a separate WebSocket server. |
+| @types/konva | Konva 10.x ships its own TypeScript declarations. No DefinitelyTyped package needed. |
 
 ---
 
-## Detailed Rationale for Key Decisions
+## Integration Architecture
 
-### Union-Find: SciPy DisjointSet vs. Custom
+### Supabase Realtime for Pipeline Monitoring
 
-The PROJECT.md specifies "union-find clustering" with "3-pass expanding tolerance (0.3t, 0.6t, t)." The algorithm is:
+The run monitor is the only feature that requires Supabase Realtime configuration beyond what the existing app already uses.
 
-1. Build KDTree from all polygon vertices.
-2. For each tolerance in [0.3t, 0.6t, t]:
-   - For each vertex, find neighbors within tolerance via `KDTree.query_ball_point`.
-   - `DisjointSet.merge(v_i, v_j)` for each neighbor pair.
-3. After all passes, `DisjointSet.subsets()` gives the vertex clusters.
-4. For each cluster, determine valence (how many distinct panels contribute).
-5. Valence 2: midpoint snap. Valence 3: closed-form triple-plane intersection. Valence 4+: lstsq.
+**Required Supabase setup:**
 
-SciPy's DisjointSet handles this directly. The `merge()` operation is amortized O(alpha(N)) with path halving. No reason to reimplement.
+```sql
+-- New table for pipeline run status
+CREATE TABLE pipeline_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sample_id TEXT NOT NULL REFERENCES samples(id),
+  status TEXT NOT NULL DEFAULT 'pending',  -- pending, running, completed, failed
+  stage TEXT,                               -- planes, snap_v2, mesh, cutsheets, etc.
+  progress INTEGER DEFAULT 0,              -- 0-100
+  error TEXT,
+  snap_v2_features JSONB,                  -- feature graph JSON stored on completion
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
 
-### Least-Squares Solver: numpy vs. scipy
+-- Enable Realtime on this table
+ALTER PUBLICATION supabase_realtime ADD TABLE pipeline_runs;
 
-For the apex solver, the system is `A @ x = b` where A is (K, 3) matrix of plane normals and b is (K,) vector of plane offsets. This is a standard linear least-squares problem.
+-- RLS policy: authenticated users can read their own runs
+ALTER TABLE pipeline_runs ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view own runs" ON pipeline_runs
+  FOR SELECT USING (auth.uid() IS NOT NULL);
+```
 
-- **Valence 3 (exact):** `numpy.linalg.solve(A, b)` -- direct solve, O(1) essentially for 3x3.
-- **Valence 4+ (overdetermined):** `numpy.linalg.lstsq(A, b)` -- SVD-based, returns residuals for quality.
-- **Residual check:** If `residuals[0] > threshold`, the planes don't converge cleanly -- flag for review.
+**Dashboard subscription pattern:**
 
-Kelly & Wonka (2011) and Ren et al. (SGA21) both use this exact formulation. Their refinement is in residual weighting: weight each plane's row by `1/rms_residual` from the SVD plane fit. This is a single line: `W = np.diag(1.0 / rms_residuals); lstsq(W @ A, W @ b)`.
+```typescript
+const channel = supabase
+  .channel(`run-${sampleId}`)
+  .on(
+    'postgres_changes',
+    {
+      event: '*',
+      schema: 'public',
+      table: 'pipeline_runs',
+      filter: `sample_id=eq.${sampleId}`,
+    },
+    (payload) => {
+      updateRunStatus(payload.new as PipelineRun);
+    }
+  )
+  .subscribe();
 
-### Konva Canvas Architecture for Labeling
+// Cleanup on unmount
+return () => { supabase.removeChannel(channel); };
+```
 
-The labeling dashboard renders:
-- Background: DSM hillshade raster image (one Konva `Image` node).
-- Polygon layer: `<Line>` for each panel boundary (closed polygon, fillEnabled).
-- Vertex layer: `<Circle>` for each corner, draggable with snap constraints.
-- Overlay layer: Feature graph edges, valence dots, magnet indicators.
+**Sidecar writes** (Python, supabase-py):
 
-Konva's scene graph maps this naturally:
+```python
+from supabase import create_client
+
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# In background task
+supabase.table("pipeline_runs").insert({
+    "sample_id": sample_id,
+    "status": "running",
+    "stage": "planes",
+    "progress": 0,
+}).execute()
+
+# Update as pipeline progresses
+supabase.table("pipeline_runs").update({
+    "stage": "snap_v2",
+    "progress": 25,
+}).eq("id", run_id).execute()
+```
+
+### Konva Layer Architecture
+
+Critical to design upfront (see PITFALLS.md Pitfall 9 -- Konva performance):
 
 ```
-Stage
-  Layer (background)
-    Image (hillshade)
-  Layer (panels)
-    Group (panel-1)
-      Line (boundary)
-      Circle (vertex-0, draggable)
-      Circle (vertex-1, draggable)
+Stage (container div fills viewport)
+  Layer "background" (listening={false})
+    Image (DSM hillshade raster)
+  Layer "panels" (listening on vertex circles only)
+    Group "panel-{id}" (per panel)
+      Line (polygon boundary, closed=true, fill with alpha)
+      Circle (vertex-0, draggable, 6px radius)
+      Circle (vertex-1, draggable, 6px radius)
       ...
-    Group (panel-2)
-      ...
-  Layer (overlay)
-    Line (feature-edge-0)
-    Circle (apex-dot, fill by valence)
+  Layer "overlay" (listening={false}, only during snap-preview)
+    Circle (feature dot, fill by valence color)
+    Line (feature edge)
     Text (magnet label "-> P3.C1")
 ```
 
-### Zustand + zundo for Undo/Redo
+Separate layers prevent the static DSM image from redrawing when vertices move. The overlay layer renders only when snap preview is active.
 
-The store shape for the labeling state:
+### Zustand + zundo Store Shape
 
 ```typescript
 interface LabelingState {
-  // Geometry (tracked by zundo)
-  panels: Record<string, Panel>;      // panel ID -> vertices, plane
-  sharedNodes: Record<string, string[]>; // node ID -> [panelId.vertexIdx, ...]
+  // --- Geometry (tracked by zundo) ---
+  panels: Record<string, {
+    id: string;
+    vertices: [number, number][];  // pixel coords
+    closed: boolean;
+  }>;
+  sharedNodes: Record<string, string[]>;  // nodeId -> ["panelId.vertexIdx", ...]
 
-  // UI ephemeral (NOT tracked by zundo via partialize)
-  hoveredPanel: string | null;
-  selectedPanel: string | null;
+  // --- UI ephemeral (excluded from undo via partialize) ---
+  activePanelId: string | null;
+  hoveredVertexKey: string | null;  // "panelId.vertexIdx"
   zoom: number;
-  snapPreview: FeatureGraph | null;
+  offset: { x: number; y: number };
+  toolMode: 'draw' | 'edit' | 'preview';
+  snapPreview: SnapPreviewResult | null;
+  magnetTarget: { panelId: string; vertexIdx: number } | null;
 }
-```
 
-zundo's `partialize` excludes UI state from undo history:
-
-```typescript
-const useStore = create<LabelingState>()(
+const useLabelingStore = create<LabelingState>()(
   temporal(
-    (set) => ({ /* ... */ }),
+    (set) => ({
+      panels: {},
+      sharedNodes: {},
+      activePanelId: null,
+      hoveredVertexKey: null,
+      zoom: 1,
+      offset: { x: 0, y: 0 },
+      toolMode: 'draw',
+      snapPreview: null,
+      magnetTarget: null,
+    }),
     {
       partialize: (state) => ({
         panels: state.panels,
@@ -165,150 +248,136 @@ const useStore = create<LabelingState>()(
 );
 ```
 
-### Supabase Realtime for Pipeline Monitoring
-
-The dashboard's run monitor subscribes to a `pipeline_runs` table:
-
-```typescript
-supabase
-  .channel('run-monitor')
-  .on('postgres_changes', {
-    event: '*',
-    schema: 'public',
-    table: 'pipeline_runs',
-    filter: `sample_id=eq.${sampleId}`,
-  }, (payload) => {
-    // payload.new has: status, stage, progress, error, snap_v2_features
-    updateRunStatus(payload.new);
-  })
-  .subscribe();
-```
-
-The FastAPI sidecar writes to this table as the pipeline progresses:
-`INSERT INTO pipeline_runs (sample_id, status, stage) VALUES (...)`
-
-No additional WebSocket server needed. Supabase handles the pub/sub.
+The `partialize` option is the key design choice: only `panels` and `sharedNodes` enter the undo history. Zoom, tool mode, hover state, and snap preview are ephemeral and excluded. This prevents Pitfall 8 (undo state explosion from drag operations and hover events).
 
 ---
 
-## Alternatives Considered
+## Shared-Node Magnet Implementation Notes
 
-| Category | Recommended | Alternative | Why Not |
-|----------|-------------|-------------|---------|
-| Union-find | `scipy.cluster.hierarchy.DisjointSet` | Custom Python class | SciPy's is battle-tested with path halving + merge-by-size. Custom impl risks subtle bugs in rank/size tracking. |
-| Spatial index | `scipy.spatial.KDTree` | `shapely.STRtree` | KDTree is better for point-radius queries (vertex proximity). STRtree is better for polygon intersection queries. Our use case is vertex clustering. |
-| LS solver | `numpy.linalg.lstsq` + `numpy.linalg.solve` | `scipy.optimize.least_squares` | Plane intersection is linear, not nonlinear. scipy's NLS solver adds Jacobian overhead for zero benefit. |
-| Polygon repair | `shapely.validation.make_valid` | `polygon.buffer(0)` | `buffer(0)` can erode thin slivers and change polygon area. `make_valid` preserves area while fixing topology. |
-| Feature graph | Simple `dict[int, set[int]]` + dataclass | NetworkX | ~20-50 node graph does not justify a 2MB dependency. Adjacency dict + a 30-line class covers degree, neighbors, JSON export. |
-| Canvas lib | Konva + react-konva | Fabric.js | Scene graph architecture, official React bindings, dirty-region rendering, automatic memory management. Fabric's flat model requires manual cleanup. |
-| Canvas lib | Konva + react-konva | Raw Canvas 2D API | No hit detection, no event system, no scene graph. Would require reimplementing what Konva provides. |
-| State mgmt | Zustand + zundo | Redux + redux-undo | 5x less boilerplate. zundo is 700 bytes vs redux-undo's 3KB+. Zustand's selector model prevents unnecessary Konva re-renders. |
-| Realtime | Supabase Postgres Changes | Polling / SSE | Already using Supabase. Postgres Changes is push-based with row-level filtering. Polling wastes bandwidth; SSE requires a separate endpoint. |
-| API framework | FastAPI | Flask | FastAPI has native async, Pydantic validation, auto-OpenAPI docs. Flask would need flask-pydantic, flask-cors, etc. as separate deps. |
+The 12px snap radius magnet is the single most important UX feature in Milestone 2. Implementation requires coordination between Konva events and Zustand state.
+
+**Client-side proximity detection** (on every mousemove during vertex placement):
+
+```typescript
+function findMagnetTarget(
+  cursorPos: { x: number; y: number },
+  panels: Record<string, Panel>,
+  currentPanelId: string,
+  snapRadiusPx: number = 12,
+): MagnetTarget | null {
+  let closest: MagnetTarget | null = null;
+  let minDist = snapRadiusPx;
+
+  for (const [panelId, panel] of Object.entries(panels)) {
+    if (panelId === currentPanelId) continue;  // Don't snap to own vertices
+    for (let i = 0; i < panel.vertices.length; i++) {
+      const [vx, vy] = panel.vertices[i];
+      const dist = Math.hypot(cursorPos.x - vx, cursorPos.y - vy);
+      if (dist < minDist) {
+        minDist = dist;
+        closest = { panelId, vertexIdx: i, position: [vx, vy] };
+      }
+    }
+  }
+  return closest;
+}
+```
+
+For ~20 panels with ~8 vertices each, this is 160 distance calculations per mousemove -- trivially fast. No spatial index needed on the client.
+
+**Shift-click override:** When shift is held, bypass magnet detection entirely and place vertex at raw cursor position. Essential for cases where the user intentionally does NOT want to snap.
 
 ---
 
 ## Version Pin Summary
 
-### Python (requirements.txt additions)
+### Python (`requirements.txt` additions for sidecar)
 
-```bash
-# Snap engine -- NO new core deps (all already in requirements.txt)
-# scipy >= 1.11     (DisjointSet, KDTree -- already present)
-# numpy >= 1.26     (lstsq, linalg.solve -- already present)
-# shapely >= 2.0    (make_valid, snap, unary_union -- already present)
-
-# API sidecar (separate requirements or optional extras)
+```
+# API sidecar (add to requirements.txt or separate api-requirements.txt)
 fastapi>=0.115,<1.0
-pydantic>=2.10,<3.0
 uvicorn>=0.30,<1.0
+supabase>=2.0,<3.0
 
-# Testing (dev dependencies)
+# Dev/test only
+httpx>=0.27,<1.0
 pytest>=8.0,<10.0
 pytest-cov>=5.0,<6.0
 ```
 
-### Frontend (package.json additions)
+**Already present** (no changes needed):
+
+```
+# From Milestone 1 -- already in requirements.txt
+numpy>=1.26
+scipy>=1.11
+shapely>=2.0
+pydantic>=2.0
+pytest>=7.0    # Consider bumping to >=8.0 for consistency
+```
+
+### Frontend (`package.json` additions)
 
 ```bash
-# Canvas + state
+# New dependencies
 npm install konva@^10.2 react-konva@^19.2 zustand@^5.0 zundo@^2.3
 
-# Already in project (verify versions)
-# @supabase/supabase-js@^2.100  (existing)
-# zod@^3.22                      (existing)
-
-# Dev
-npm install -D @types/konva  # if needed, but konva ships its own types
+# Already in project (verify)
+# @supabase/supabase-js@^2.100
+# zod@^3.22
 ```
+
+### Deployment (DigitalOcean droplet)
+
+```bash
+# Install API deps on the droplet
+pip install 'fastapi>=0.115' 'uvicorn>=0.30' 'supabase>=2.0'
+
+# Run the sidecar
+uvicorn roof_pipeline.api.app:app --host 0.0.0.0 --port 8000 --workers 2
+```
+
+Behind NGINX reverse proxy for HTTPS termination and CORS headers.
 
 ---
 
-## Installation Commands
+## Confidence Assessment
 
-### Python snap engine deps (zero new -- validation only)
-
-```bash
-# Verify existing deps cover requirements
-python -c "
-from scipy.cluster.hierarchy import DisjointSet
-from scipy.spatial import KDTree
-from numpy.linalg import lstsq, solve
-from shapely.validation import make_valid
-print('All snap engine deps present')
-"
-```
-
-### Python API sidecar deps
-
-```bash
-pip install 'fastapi>=0.115' 'pydantic>=2.10' 'uvicorn>=0.30'
-```
-
-### Python test deps
-
-```bash
-pip install 'pytest>=8.0' 'pytest-cov>=5.0'
-```
-
-### Frontend deps
-
-```bash
-npm install konva@^10.2 react-konva@^19.2 zustand@^5.0 zundo@^2.3
-```
+| Component | Confidence | Rationale |
+|-----------|------------|-----------|
+| FastAPI + uvicorn | HIGH | Context7-verified docs. FastAPI 0.136.0 supports Python 3.11. Standard ASGI pattern. |
+| Pydantic v2 | HIGH | Already validated in Milestone 1. Reusing existing schemas. |
+| supabase-py | HIGH | Official Supabase client. Stable v2.28.3. Standard insert/update pattern. |
+| Konva 10.x | HIGH | Context7-verified. Scene graph architecture confirmed. React bindings official. |
+| react-konva 19.x | HIGH | Context7-verified. Declarative Stage/Layer/Shape. React 18/19 compatible. |
+| Zustand 5.x | HIGH | Context7-verified. Hook-based, selector-based renders. |
+| zundo 2.x | HIGH | Context7-verified. temporal middleware with partialize, limit, handleSet. |
+| Supabase Realtime | HIGH | Context7-verified. postgres_changes subscription with filter syntax. |
+| Magnet snap (12px) | MEDIUM | Implementation pattern is sound but Konva-specific API surface (drag constraints, visual indicator rendering during mousemove) needs validation during Phase 3 planning. |
 
 ---
 
 ## Sources
 
-### Verified with Context7 (HIGH confidence)
-- [SciPy DisjointSet](https://docs.scipy.org/doc/scipy/reference/generated/scipy.cluster.hierarchy.DisjointSet.html) -- API: add, merge, connected, __getitem__, subset, subsets. Path halving + merge by size. Added v1.6.0.
-- [SciPy KDTree](https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.KDTree.html) -- query_ball_point for radius search.
-- [numpy.linalg.lstsq](https://numpy.org/doc/stable/reference/generated/numpy.linalg.lstsq.html) -- NumPy v2.4 docs. Returns x, residuals, rank, singular values.
-- [scipy.linalg.lstsq](https://docs.scipy.org/doc/scipy/reference/generated/scipy.linalg.lstsq.html) -- SciPy v1.17.0 docs. Similar API, chose numpy version for consistency with existing codebase.
-- [Shapely unary_union, snap, make_valid](https://shapely.readthedocs.io/en/stable/) -- Shapely 2.1.2 docs.
-- [Pydantic v2 BaseModel, field_validator, model_validator](https://docs.pydantic.dev/latest/) -- Pydantic 2.13.2 docs.
-- [React Konva events, Stage/Layer/shapes](https://konvajs.org/docs/react/index.html) -- react-konva 19.x docs.
-- [Zustand temporal middleware ecosystem](https://zustand.docs.pmnd.rs/) -- Zustand 5.x docs.
-- [Supabase Realtime Postgres Changes](https://supabase.com/docs/guides/realtime/postgres-changes) -- subscribe to INSERT/UPDATE/DELETE with filter syntax.
+### Context7 Verified (HIGH confidence)
+- [FastAPI -- BackgroundTasks, response models, CORS](https://github.com/fastapi/fastapi) -- Context7 `/fastapi/fastapi`, version 0.115+
+- [react-konva -- Stage, Layer, Line, Circle, event handling](https://github.com/konvajs/react-konva) -- Context7 `/konvajs/react-konva`
+- [Konva -- polygon (Line closed=true), drag-snap, Objects_Snapping](https://konvajs.org/) -- Context7 `/konvajs/site`
+- [Zustand -- temporal middleware ecosystem, third-party libs](https://zustand.docs.pmnd.rs/) -- Context7 `/websites/zustand_pmnd_rs`
+- [zundo -- temporal(), undo/redo/clear, partialize, limit, handleSet, wrapTemporal](https://github.com/charkour/zundo) -- Context7 `/charkour/zundo`
+- [Supabase Realtime -- postgres_changes, channel subscribe, filter](https://github.com/supabase/realtime) -- Context7 `/supabase/realtime`
 
-### Verified with official docs/PyPI/npm (HIGH confidence)
-- [FastAPI 0.135.x](https://pypi.org/project/fastapi/) -- Python 3.10+ after 0.130.0.
-- [Konva 10.2.5](https://www.npmjs.com/package/konva) -- Published April 2026.
+### PyPI / npm Verified (HIGH confidence)
+- [FastAPI 0.136.0](https://pypi.org/project/fastapi/) -- Released 2026-04-16. Python >=3.10.
+- [uvicorn 0.44.0](https://pypi.org/project/uvicorn/) -- Released 2026-04-06.
+- [supabase 2.28.3](https://pypi.org/project/supabase/) -- Released 2026-03-20. Python >=3.9.
+- [python-multipart 0.0.26](https://pypi.org/project/python-multipart/) -- Released 2026-04-10. CVE fix in 0.0.18+.
+- [httpx 0.28.1](https://pypi.org/project/httpx/) -- Released 2024-12-06. Stable.
+- [konva 10.2.5](https://www.npmjs.com/package/konva) -- Published April 2026.
 - [react-konva 19.2.3](https://www.npmjs.com/package/react-konva) -- Published February 2026.
-- [Zustand 5.0.11](https://www.npmjs.com/package/zustand) -- Published January 2026.
-- [zundo 2.3.0](https://www.npmjs.com/package/zundo) -- temporal middleware, <700 bytes, partialize option.
+- [zustand 5.0.11](https://www.npmjs.com/package/zustand) -- Published January 2026.
+- [zundo 2.3.0](https://www.npmjs.com/package/zundo) -- 700 bytes, 231K monthly downloads.
 - [@supabase/supabase-js 2.103.2](https://www.npmjs.com/package/@supabase/supabase-js) -- Published April 2026.
-- [SciPy 1.17.1](https://pypi.org/project/SciPy/) -- Released February 2026.
-- [NumPy 2.4.4](https://pypi.org/project/numpy/) -- Released March 2026.
-- [Shapely 2.1.2](https://pypi.org/project/shapely/) -- BSD licensed, GEOS backend.
-- [Pydantic 2.13.2](https://pypi.org/project/pydantic/) -- Released April 2026.
-- [pytest 9.0.3](https://pypi.org/project/pytest/) -- Released April 2026.
-
-### WebSearch verified (MEDIUM confidence)
-- [Konva vs Fabric.js comparison](https://dev.to/lico/react-comparison-of-js-canvas-libraries-konvajs-vs-fabricjs-1dan) -- Scene graph vs flat model, memory management differences.
-- [zundo GitHub](https://github.com/charkour/zundo) -- undo/redo/clear/pastStates/futureStates API, partialize and limit options.
 
 ---
-
-*Stack analysis: 2026-04-18*
+*Stack research for Milestone 2: 2026-04-19*
