@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -66,6 +67,8 @@ def main():
     ap.add_argument("--waste-pct", type=float, default=11.0)
     ap.add_argument("--snap-v2-dryrun", action="store_true",
                     help="print snap-v2 feature graph as JSON and exit")
+    ap.add_argument("--snap-v2", action="store_true",
+                    help="use topology-aware snap engine v2 instead of pairwise snap")
     args = ap.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -105,18 +108,32 @@ def main():
     if panels_json.exists() and not args.no_clicks:
         log.info("=== boundaries from clicks (%s) ===", panels_json.name)
         polygons = polygons_from_clicks(panels_json, dsm, res_m, planes)
-        # 2D (plan-view) adjacency: two panels are snapped/densified when
-        # they overlap in XY regardless of their elevation. Matters for
-        # roofs where a low patio abuts a tall main roof.
-        log.info("=== corner snapping (XY, tol=%.3f m) ===", args.snap_tol)
-        polygons = snap_shared_corners_xy(polygons, planes, tol=args.snap_tol)
-        log.info("=== edge densification (XY, tol=%.3f m) ===", args.snap_tol * 0.6)
-        polygons = densify_shared_edges_xy(polygons, planes, tol=args.snap_tol * 0.6)
     else:
         log.info("=== boundaries from mask contours (fallback) ===")
         polygons = extract_panel_polygons(mask, dsm, res_m, planes)
-        log.info("=== edge snapping (tol=%.3f m) ===", args.snap_tol)
-        polygons = snap_shared_edges(polygons, tol=args.snap_tol)
+
+    if args.snap_v2:
+        log.info("=== snap-v2 engine (tol=%.3f m) ===", args.snap_tol)
+        polygons, feature_graph = snap_v2(polygons, planes, tol=args.snap_tol)
+
+        # Write snap_v2_features.json sidecar (INTG-02)
+        features_path = args.out_dir / "snap_v2_features.json"
+        with open(features_path, "w") as f:
+            json.dump(feature_graph, f, indent=2, sort_keys=True)
+        log.info("wrote snap_v2_features.json: %s", features_path)
+    else:
+        # Existing v1 snap path (unchanged)
+        if panels_json.exists() and not args.no_clicks:
+            # 2D (plan-view) adjacency: two panels are snapped/densified when
+            # they overlap in XY regardless of their elevation. Matters for
+            # roofs where a low patio abuts a tall main roof.
+            log.info("=== corner snapping (XY, tol=%.3f m) ===", args.snap_tol)
+            polygons = snap_shared_corners_xy(polygons, planes, tol=args.snap_tol)
+            log.info("=== edge densification (XY, tol=%.3f m) ===", args.snap_tol * 0.6)
+            polygons = densify_shared_edges_xy(polygons, planes, tol=args.snap_tol * 0.6)
+        else:
+            log.info("=== edge snapping (tol=%.3f m) ===", args.snap_tol)
+            polygons = snap_shared_edges(polygons, tol=args.snap_tol)
 
     log.info("=== mesh ===")
     mesh = build_roof_mesh(polygons, planes)
