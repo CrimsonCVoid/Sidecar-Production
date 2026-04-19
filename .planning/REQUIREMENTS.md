@@ -74,7 +74,7 @@ All 22 requirements delivered. See traceability table below.
 
 ### Testing
 
-- [ ] **TESTING-01a**: Playwright E2E tests for labeler flows -- label-save-reload, undo-redo, magnet-snap-override (minimum 3 tests)
+- [x] **TESTING-01a**: Playwright E2E tests for labeler flows -- label-save-reload, undo-redo, magnet-snap-override (minimum 3 tests)
 - [ ] **TESTING-01b**: Playwright E2E tests for dashboard flows -- sample list navigation, run monitor status updates, diff viewer rendering
 
 ### Observability
@@ -144,7 +144,7 @@ All 22 requirements delivered. See traceability table below.
 | DASH-05 | Phase 5 | Complete (05-01) |
 | DASH-06 | Phase 5 | Not started |
 | OBSERVABILITY-01b | Phase 5 | Complete (05-01) |
-| TESTING-01a | Phase 5 | Not started |
+| TESTING-01a | Phase 5 | Complete (05-05) |
 | DIDX-01 | Phase 6 | Not started |
 | DIDX-02 | Phase 6 | Not started |
 | DIDX-03 | Phase 6 | Not started |

@@ -54,7 +54,7 @@ Plans:
 
 - [x] **Phase 3: Bug Fixes** - Fix densify area-loss bug and labeler duplicate-corner dedup so the engine is production-safe before API exposure (completed 2026-04-19)
 - [x] **Phase 4: FastAPI Sidecar** - Snap-preview endpoint, pipeline-run trigger, label persistence, and structured server-side logging on existing DigitalOcean droplet (completed 2026-04-19)
-- [ ] **Phase 5: Labeling Dashboard** - Next.js Konva canvas with shared-node magnet, undo/redo, snap preview overlay, auto-close, mask.json output, browser-side error capture, and Playwright E2E tests for labeler flows
+- [x] **Phase 5: Labeling Dashboard** - Next.js Konva canvas with shared-node magnet, undo/redo, snap preview overlay, auto-close, mask.json output, browser-side error capture, and Playwright E2E tests for labeler flows (completed 2026-04-19)
 - [ ] **Phase 6: Dashboard Index + Monitoring** - Sample table, filter chips, diff viewer, Supabase Realtime run monitor, and Playwright E2E tests for dashboard flows
 
 ---
@@ -110,7 +110,7 @@ Plans:
 - [x] 05-02-PLAN.md -- Konva canvas, polygon drawing, magnet snap, auto-close, panel palette (DASH-01, DASH-02, DASH-06)
 - [x] 05-03-PLAN.md -- Keyboard shortcuts, undo/redo, LabelingHeader, LabelingToolbar (DASH-03)
 - [x] 05-04-PLAN.md -- Snap preview overlay, save labels, error capture wiring (DASH-04, DASH-05, OBSERVABILITY-01b)
-- [ ] 05-05-PLAN.md -- Playwright E2E tests for labeler flows (TESTING-01a)
+- [x] 05-05-PLAN.md -- Playwright E2E tests for labeler flows (TESTING-01a)
 **UI hint**: yes
 
 ### Phase 6: Dashboard Index + Monitoring
@@ -136,10 +136,10 @@ Plans:
 | 2. Apex Solver + Integration | v1.0 | 4/4 | Complete | 2026-04-19 |
 | 3. Bug Fixes | v2.0 | 2/2 | Complete | 2026-04-19 |
 | 4. FastAPI Sidecar | v2.0 | 4/4 | Complete | 2026-04-19 |
-| 5. Labeling Dashboard | v2.0 | 4/5 | Executing | - |
+| 5. Labeling Dashboard | v2.0 | 5/5 | Complete | 2026-04-19 |
 | 6. Dashboard Index + Monitoring | v2.0 | 0/? | Not started | - |
 
 ---
 
 *Roadmap created: 2026-04-18 (Milestone 1)*
-*Last updated: 2026-04-19 -- Phase 5 plan 04 complete (snap preview + save + error capture)*
+*Last updated: 2026-04-19 -- Phase 5 complete (all 5 plans, Playwright E2E tests passing)*
