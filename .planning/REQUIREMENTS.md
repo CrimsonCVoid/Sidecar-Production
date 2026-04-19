@@ -134,7 +134,7 @@ All 22 requirements delivered. See traceability table below.
 | FIX-02 | Phase 3 | Not started |
 | LABEL-01 | Phase 3 | Not started |
 | API-01 | Phase 4 | Not started |
-| API-02 | Phase 4 | Not started |
+| API-02 | Phase 4 | In progress (04-02: run_pipeline() callable extracted) |
 | API-03 | Phase 4 | Not started |
 | OBSERVABILITY-01a | Phase 4 | Complete (04-01) |
 | DASH-01 | Phase 5 | Not started |

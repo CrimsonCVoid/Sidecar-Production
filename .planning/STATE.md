@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-04-18)
 
 **Core value:** Hip and ridge apex convergences (3+ panels) must weld to a single geometrically-correct point with zero slivers in the output mesh.
-**Current focus:** Phase 4 executing -- plan 01 complete
+**Current focus:** Phase 4 executing -- plan 02 complete
 
 ## Current Position
 
 Phase: 4 of 6 (FastAPI Sidecar) -- EXECUTING
-Plan: 1 of 4 in current phase
-Status: Plan 01 complete, ready for plan 02
-Last activity: 2026-04-19 -- Phase 4 plan 01 executed (API skeleton with config, middleware, schemas, stub routers)
+Plan: 2 of 4 in current phase
+Status: Plan 02 complete, ready for plan 03
+Last activity: 2026-04-19 -- Phase 4 plan 02 executed (run_real.py refactor: run_pipeline() callable)
 
 Progress: [======================.....................................] 37% (10/13 plans complete or planned)
 
@@ -30,11 +30,12 @@ Progress: [======================.....................................] 37% (10/
 | 1. Feature Graph + Clustering | 3/3 | -- | -- |
 | 2. Apex Solver + Integration | 4/4 | -- | -- |
 | 3. Bug Fixes | 2/2 | -- | -- |
-| 4. FastAPI Sidecar | 1/4 | 4min | 4min |
+| 4. FastAPI Sidecar | 2/4 | 6min | 3min |
 
 **Recent Trend:**
 - Milestone 1 completed in 2 phases, 7 plans
 - Phase 4 plan 01 completed in 4 min
+- Phase 4 plan 02 completed in 2 min
 - Trend: Stable
 
 ## Accumulated Context
@@ -50,6 +51,8 @@ Recent decisions affecting current work:
 - [M2]: Shared-node magnet in UI (12px snap radius) eliminates ridge drift at source
 - [P4-01]: Graceful Settings fallback -- app starts without .env, logs warning, uses default CORS origins
 - [P4-01]: .env.example tracked via !.env.example gitignore negation rule
+- [P4-02]: NaN-safety mask clearing moved into run_pipeline() so both CLI and API get it
+- [P4-02]: estimate_number defaults to None in run_pipeline(); CLI passes dsm.stem fallback
 
 ### Pending Todos
 
@@ -70,6 +73,6 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-04-19
-Stopped at: Completed 04-01-PLAN.md (API skeleton)
-Resume file: .planning/phases/04-fastapi-sidecar/04-02-PLAN.md
-Next action: /gsd-execute-phase 4 (continue with plan 02)
+Stopped at: Completed 04-02-PLAN.md (run_pipeline() callable refactor)
+Resume file: .planning/phases/04-fastapi-sidecar/04-03-PLAN.md
+Next action: /gsd-execute-phase 4 (continue with plan 03)
