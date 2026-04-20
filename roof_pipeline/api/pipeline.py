@@ -602,7 +602,7 @@ async def get_cutsheet_data(
     #    projected onto each fitted plane. Order matters — the signature
     #    is extract_panel_polygons(mask, dsm, res_m, planes) which uses
     #    the planes to lift 2D mask boundaries into proper 3D points.
-    planes: dict[int, Plane] = fit_all_panels(dsm_arr, mask_arr)
+    planes: dict[int, Plane] = fit_all_panels(dsm_arr, mask_arr, res_m)
     polygons_3d = extract_panel_polygons(mask_arr, dsm_arr, res_m, planes)
 
     # 6. Per-panel stats in plan view (rotated to horizontal for clean 2D)
