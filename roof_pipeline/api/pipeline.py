@@ -521,8 +521,7 @@ async def get_cutsheet_data(
     """
     from io import BytesIO
 
-    import trimesh
-    from ..boundaries import extract_panel_polygons, simplify_polygons
+    from ..boundaries import extract_panel_polygons
     from ..cutsheets import (
         azimuth_degrees,
         meters_to_ft_in,
@@ -530,7 +529,6 @@ async def get_cutsheet_data(
         rotation_to_horizontal,
         slope_rise_over_12,
     )
-    from ..mesh import build_roof_mesh
     from ..planes import Plane, fit_plane
 
     request.state.sample_id = sample_id
@@ -602,7 +600,7 @@ async def get_cutsheet_data(
 
     # 5. Extract 3D polygons + fit planes per panel
     polygons_3d = extract_panel_polygons(dsm_arr, mask_arr, res_m=res_m)
-    polygons_3d = simplify_polygons(polygons_3d, rdp_epsilon_px=1.0)
+
 
     planes: dict[int, Plane] = {}
     for pid, poly in polygons_3d.items():
