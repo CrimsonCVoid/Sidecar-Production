@@ -529,7 +529,7 @@ async def get_cutsheet_data(
         rotation_to_horizontal,
         slope_rise_over_12,
     )
-    from ..planes import Plane, fit_plane
+    from ..planes import Plane, fit_all_panels
 
     request.state.sample_id = sample_id
 
@@ -598,16 +598,12 @@ async def get_cutsheet_data(
             continue
         cv2.fillPoly(mask_arr, [corners], new_id)
 
-    # 5. Extract 3D polygons + fit planes per panel
-    polygons_3d = extract_panel_polygons(dsm_arr, mask_arr, res_m=res_m)
-
-
-    planes: dict[int, Plane] = {}
-    for pid, poly in polygons_3d.items():
-        try:
-            planes[pid] = fit_plane(poly)
-        except Exception as exc:
-            log.warning("fit_plane failed for panel %d: %s", pid, exc)
+    # 5. Fit a plane per panel from DSM+mask, then extract 3D polygons
+    #    projected onto each fitted plane. Order matters — the signature
+    #    is extract_panel_polygons(mask, dsm, res_m, planes) which uses
+    #    the planes to lift 2D mask boundaries into proper 3D points.
+    planes: dict[int, Plane] = fit_all_panels(dsm_arr, mask_arr)
+    polygons_3d = extract_panel_polygons(mask_arr, dsm_arr, res_m, planes)
 
     # 6. Per-panel stats in plan view (rotated to horizontal for clean 2D)
     M_TO_FT = 3.280839895
