@@ -366,6 +366,32 @@ def _slope_numerator(slope: str) -> int | None:
         return None
 
 
+def _panel_slope_num(panel: dict, fallback: int) -> int:
+    """Per-panel X/12 pitch derived from plane_normal.
+
+    rise/run = sqrt(nx^2 + ny^2) / |nz|, rendered as X/12 rounded to the
+    nearest integer rise. Falls back to the roof-wide primary slope when
+    the normal is missing or degenerate (near-vertical panels).
+    """
+    n = panel.get("plane_normal")
+    if n is None:
+        return fallback
+    try:
+        arr = np.asarray(n, dtype=float).ravel()
+    except (TypeError, ValueError):
+        return fallback
+    if arr.shape[0] < 3:
+        return fallback
+    nx, ny, nz = float(arr[0]), float(arr[1]), float(arr[2])
+    abs_nz = abs(nz)
+    if abs_nz < 1e-4:  # sheer vertical face, pitch undefined
+        return fallback
+    run = math.hypot(nx, ny) / abs_nz
+    rise12 = int(round(run * 12.0))
+    # Clamp to a sane roofing range so a noisy plane fit can't print "+94".
+    return max(0, min(24, rise12))
+
+
 # ---------------------------------------------------------------------------
 # Drawing primitives
 # ---------------------------------------------------------------------------
@@ -1243,7 +1269,7 @@ def _render_page2(
     if not panels:
         return
 
-    slope_num = _slope_numerator(roof.get("primary_slope", "4/12")) or 4
+    fallback_slope = _slope_numerator(roof.get("primary_slope", "4/12")) or 4
 
     # Fixed 2 x 3 grid (6 slots); last page may have empty slots.
     margin_x = 36
@@ -1266,7 +1292,8 @@ def _render_page2(
         slot_x0 = margin_x + col * (slot_w + 24)
         slot_y0 = top_y - (row + 1) * slot_h - row * gap_y
         slot_placements = _draw_panel_edge_diagram(
-            c, panel, slot_x0, slot_y0, slot_w, slot_h, slope_num,
+            c, panel, slot_x0, slot_y0, slot_w, slot_h,
+            _panel_slope_num(panel, fallback_slope),
             panel_label=panel.get("panel_id", f"P{absolute_idx + 1}"),
             marker_offset=marker_running,
         )
@@ -1632,7 +1659,7 @@ def _render_page4(
     scale, offset = fit_to_box(all_xy, drw_w, drw_h, margin=0.08)
     offset = offset + np.array([drw_x0, drw_y0])
 
-    slope_num = _slope_numerator(roof.get("primary_slope", "4/12")) or 4
+    fallback_slope = _slope_numerator(roof.get("primary_slope", "4/12")) or 4
 
     # Draw panel outlines + slope markers first so labels render on top.
     specs: list[_EdgeLabelSpec] = []
@@ -1645,6 +1672,7 @@ def _render_page4(
         outline_pg = np.array([_world_to_page(p[:2], scale, offset) for p in boundary])
         _draw_polygon(c, outline_pg, line_width=2.0, stroke=colors.black)
         centroid_pg = outline_pg.mean(axis=0)
+        slope_num = _panel_slope_num(panel, fallback_slope)
         _draw_slope_marker(c, float(centroid_pg[0]), float(centroid_pg[1]), slope_num)
         obstacle_aabbs.append((float(centroid_pg[0]) - 14, float(centroid_pg[1]) - 14,
                                float(centroid_pg[0]) + 14, float(centroid_pg[1]) + 14))
