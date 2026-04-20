@@ -489,3 +489,226 @@ async def generate_pdf(
             "Content-Disposition": f'attachment; filename="{sample_id[:8]}_cutsheets.pdf"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Cutsheet data as JSON (for interactive UI — same source data as the PDF)
+# ---------------------------------------------------------------------------
+
+
+_COMPASS_LABELS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def _azimuth_label(deg: float) -> str:
+    """Bucket 0-360° azimuth into 8 compass sectors."""
+    idx = int(round((deg % 360) / 45)) % 8
+    return _COMPASS_LABELS[idx]
+
+
+@router.get("/cutsheet-data/{sample_id}")
+async def get_cutsheet_data(
+    sample_id: str,
+    request: Request,
+    supabase: Client = Depends(get_supabase),
+    settings: Settings = Depends(get_settings),
+):
+    """Return the structured data that powers the cutsheet PDF, as JSON.
+
+    The UI uses this to render an interactive cutsheet (clickable panels,
+    selectable detail view). Exactly the same pipeline as
+    /generate-pdf/{sample_id} but returns panel/plane/mesh stats as JSON
+    instead of rendering a PDF.
+    """
+    from io import BytesIO
+
+    import trimesh
+    from ..boundaries import extract_panel_polygons, simplify_polygons
+    from ..cutsheets import (
+        azimuth_degrees,
+        meters_to_ft_in,
+        polygon_area_2d,
+        rotation_to_horizontal,
+        slope_rise_over_12,
+    )
+    from ..mesh import build_roof_mesh
+    from ..planes import Plane, fit_plane
+
+    request.state.sample_id = sample_id
+
+    # 1. Labels
+    labels_result = (
+        supabase.table("training_labels")
+        .select("annotations")
+        .eq("sample_id", sample_id)
+        .execute()
+    )
+    if not labels_result.data:
+        raise HTTPException(
+            status_code=404, detail="No labels saved for this project"
+        )
+    annotations = labels_result.data[0].get("annotations") or {}
+    panels = annotations.get("panels", [])
+    if not panels:
+        raise HTTPException(status_code=400, detail="Labels have no panels")
+
+    # 2. Sample metadata
+    sample_result = (
+        supabase.table("training_samples")
+        .select(
+            "dsm_storage_path, formatted_address, source_address, "
+            "meters_per_px, width_px, height_px"
+        )
+        .eq("id", sample_id)
+        .execute()
+    )
+    if not sample_result.data:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    sample = sample_result.data[0]
+    dsm_path = sample.get("dsm_storage_path")
+    if not dsm_path:
+        raise HTTPException(status_code=400, detail="Sample has no DSM")
+
+    # 3. Download DSM
+    dsm_bytes = None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
+        try:
+            dsm_bytes = supabase.storage.from_(bucket).download(dsm_path)
+            break
+        except Exception:
+            continue
+    if dsm_bytes is None:
+        raise HTTPException(
+            status_code=404, detail="Could not download DSM from storage"
+        )
+
+    # 4. Open DSM and rasterize labels into a mask
+    import cv2
+    import rasterio
+
+    with rasterio.open(BytesIO(dsm_bytes)) as ds:
+        dsm_arr = ds.read(1).astype(np.float64)
+        h, w = ds.height, ds.width
+        res_m = abs(ds.res[0]) if ds.res else float(
+            sample.get("meters_per_px") or 0.25
+        )
+
+    mask_arr = np.zeros((h, w), dtype=np.uint8)
+    for i, p in enumerate(panels):
+        new_id = i + 1
+        corners = np.array(p.get("corners_pix", []), dtype=np.int32)
+        if len(corners) < 3:
+            continue
+        cv2.fillPoly(mask_arr, [corners], new_id)
+
+    # 5. Extract 3D polygons + fit planes per panel
+    polygons_3d = extract_panel_polygons(dsm_arr, mask_arr, res_m=res_m)
+    polygons_3d = simplify_polygons(polygons_3d, rdp_epsilon_px=1.0)
+
+    planes: dict[int, Plane] = {}
+    for pid, poly in polygons_3d.items():
+        try:
+            planes[pid] = fit_plane(poly)
+        except Exception as exc:
+            log.warning("fit_plane failed for panel %d: %s", pid, exc)
+
+    # 6. Per-panel stats in plan view (rotated to horizontal for clean 2D)
+    M_TO_FT = 3.280839895
+    panel_payloads = []
+    for pid in sorted(polygons_3d.keys()):
+        poly = polygons_3d[pid]
+        plane = planes.get(pid)
+        if plane is None:
+            continue
+
+        # Rotate the 3D polygon to horizontal so plan-view math works
+        R = rotation_to_horizontal(plane.normal)
+        rotated = (R @ poly.T).T
+        xy = rotated[:, :2]
+
+        # Center at origin for the UI — keeps coords compact
+        center = xy.mean(axis=0)
+        xy_centered = xy - center
+
+        # Edges + dimensions
+        edges = []
+        for i in range(len(xy_centered)):
+            p1 = xy_centered[i]
+            p2 = xy_centered[(i + 1) % len(xy_centered)]
+            length_m = float(np.linalg.norm(p2 - p1))
+            edges.append(
+                {
+                    "length_m": length_m,
+                    "length_ft_in": meters_to_ft_in(length_m),
+                    "start_ft": [float(p1[0] * M_TO_FT), float(p1[1] * M_TO_FT)],
+                    "end_ft": [float(p2[0] * M_TO_FT), float(p2[1] * M_TO_FT)],
+                }
+            )
+
+        area_m2 = float(polygon_area_2d(xy_centered))
+        panel_payloads.append(
+            {
+                "id": int(pid),
+                "area_sqft": round(area_m2 * 10.7639104, 1),
+                "slope_rise": int(slope_rise_over_12(plane.normal)),
+                "azimuth_deg": round(float(azimuth_degrees(plane.normal)), 1),
+                "azimuth_label": _azimuth_label(
+                    float(azimuth_degrees(plane.normal))
+                ),
+                "perimeter_ft": round(
+                    sum(e["length_m"] for e in edges) * M_TO_FT, 2
+                ),
+                "vertex_count": int(len(xy_centered)),
+                "vertices_ft": [
+                    [float(p[0] * M_TO_FT), float(p[1] * M_TO_FT)]
+                    for p in xy_centered
+                ],
+                "edges": [
+                    {
+                        "length_ft_in": e["length_ft_in"],
+                        "length_ft": round(e["length_m"] * M_TO_FT, 2),
+                    }
+                    for e in edges
+                ],
+            }
+        )
+
+    # 7. Plan view for the aggregate diagram — all panels in world coords
+    plan_panels = []
+    for pid in sorted(polygons_3d.keys()):
+        poly = polygons_3d[pid]
+        # Just use raw xy from 3D polygon (top-down projection)
+        plan_panels.append(
+            {
+                "id": int(pid),
+                "vertices_ft": [
+                    [float(v[0] * M_TO_FT), float(v[1] * M_TO_FT)]
+                    for v in poly
+                ],
+            }
+        )
+
+    total_area_sqft = sum(p["area_sqft"] for p in panel_payloads)
+
+    return {
+        "sample_id": sample_id,
+        "project": {
+            "address": sample.get("formatted_address")
+            or sample.get("source_address")
+            or None,
+        },
+        "totals": {
+            "panel_count": len(panel_payloads),
+            "total_area_sqft": round(total_area_sqft, 1),
+            "average_slope_rise": (
+                round(
+                    sum(p["slope_rise"] for p in panel_payloads)
+                    / max(len(panel_payloads), 1),
+                    1,
+                )
+                if panel_payloads
+                else 0
+            ),
+        },
+        "plan_view": {"panels": plan_panels},
+        "panels": panel_payloads,
+    }
