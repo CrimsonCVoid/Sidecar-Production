@@ -30,3 +30,6 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3000"]
     storage_bucket: str = "pipeline-outputs"
     training_bucket: str = "training-data"
+    pdf_output_bucket: str = "pdf-outputs"
+    pdf_signed_url_ttl_seconds: int = 3600
+    internal_api_key: str = ""  # Shared secret between Next.js proxy and this sidecar

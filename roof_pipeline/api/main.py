@@ -13,6 +13,7 @@ from .errors import router as errors_router
 from .hillshade import router as hillshade_router
 from .labels import router as labels_router
 from .middleware import configure_logging, structured_logging_middleware
+from .pdf import router as pdf_router
 from .pipeline import router as pipeline_router
 from .schemas import ErrorResponse
 from .snap import router as snap_router
@@ -78,6 +79,7 @@ app.include_router(labels_router, prefix="/api/labels", tags=["labels"])
 app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 app.include_router(solar_router, prefix="/api/solar", tags=["solar"])
 app.include_router(hillshade_router, prefix="/api/hillshade", tags=["hillshade"])
+app.include_router(pdf_router, prefix="/api/pdf", tags=["pdf"])
 
 
 # ---------------------------------------------------------------------------
