@@ -521,7 +521,6 @@ async def get_cutsheet_data(
     """
     from io import BytesIO
 
-    from ..boundaries import extract_panel_polygons
     from ..cutsheets import (
         azimuth_degrees,
         meters_to_ft_in,
@@ -529,7 +528,7 @@ async def get_cutsheet_data(
         rotation_to_horizontal,
         slope_rise_over_12,
     )
-    from ..planes import Plane, fit_all_panels
+    from ..planes import Plane, fit_plane
 
     request.state.sample_id = sample_id
 
@@ -579,8 +578,7 @@ async def get_cutsheet_data(
             status_code=404, detail="Could not download DSM from storage"
         )
 
-    # 4. Open DSM and rasterize labels into a mask
-    import cv2
+    # 4. Open DSM
     import rasterio
 
     with rasterio.open(BytesIO(dsm_bytes)) as ds:
@@ -590,96 +588,92 @@ async def get_cutsheet_data(
             sample.get("meters_per_px") or 0.25
         )
 
-    mask_arr = np.zeros((h, w), dtype=np.uint8)
-    for i, p in enumerate(panels):
-        new_id = i + 1
-        corners = np.array(p.get("corners_pix", []), dtype=np.int32)
-        if len(corners) < 3:
-            continue
-        cv2.fillPoly(mask_arr, [corners], new_id)
-
-    # 5. Fit a plane per panel from DSM+mask, then extract 3D polygons
-    #    projected onto each fitted plane. Order matters — the signature
-    #    is extract_panel_polygons(mask, dsm, res_m, planes) which uses
-    #    the planes to lift 2D mask boundaries into proper 3D points.
-    planes: dict[int, Plane] = fit_all_panels(dsm_arr, mask_arr, res_m)
-    polygons_3d = extract_panel_polygons(mask_arr, dsm_arr, res_m, planes)
-
-    # 6. Per-panel stats in plan view (rotated to horizontal for clean 2D)
+    # 5. For each user-clicked panel polygon, sample the DSM at the
+    #    clicked corners to build a clean 3D polygon (no rasterize +
+    #    contour-trace round-trip, which was producing pixel-aliased
+    #    "wavy" edges). User's clicks are authoritative.
     M_TO_FT = 3.280839895
+
+    def sample_dsm(cx: float, cy: float) -> float:
+        ix = max(0, min(w - 1, int(round(cx))))
+        iy = max(0, min(h - 1, int(round(cy))))
+        return float(dsm_arr[iy, ix])
+
     panel_payloads = []
-    for pid in sorted(polygons_3d.keys()):
-        poly = polygons_3d[pid]
-        plane = planes.get(pid)
-        if plane is None:
+    plan_panels = []
+
+    for i, user_panel in enumerate(panels):
+        pid = i + 1
+        corners_pix = user_panel.get("corners_pix", [])
+        if len(corners_pix) < 3:
             continue
 
-        # Rotate the 3D polygon to horizontal so plan-view math works
-        R = rotation_to_horizontal(plane.normal)
-        rotated = (R @ poly.T).T
-        xy = rotated[:, :2]
+        poly_3d_list = []
+        for cx, cy in corners_pix:
+            z = sample_dsm(float(cx), float(cy))
+            poly_3d_list.append([float(cx) * res_m, float(cy) * res_m, z])
+        poly_3d = np.array(poly_3d_list, dtype=np.float64)
 
-        # Center at origin for the UI — keeps coords compact
+        try:
+            plane = fit_plane(poly_3d)
+        except Exception as exc:
+            log.warning("fit_plane failed for panel %d: %s", pid, exc)
+            continue
+
+        # Rotate to horizontal for plan-view math
+        R = rotation_to_horizontal(plane.normal)
+        rotated = (R @ poly_3d.T).T
+        xy = rotated[:, :2]
         center = xy.mean(axis=0)
         xy_centered = xy - center
 
-        # Edges + dimensions
         edges = []
-        for i in range(len(xy_centered)):
-            p1 = xy_centered[i]
-            p2 = xy_centered[(i + 1) % len(xy_centered)]
+        for j in range(len(xy_centered)):
+            p1 = xy_centered[j]
+            p2 = xy_centered[(j + 1) % len(xy_centered)]
             length_m = float(np.linalg.norm(p2 - p1))
-            edges.append(
-                {
-                    "length_m": length_m,
-                    "length_ft_in": meters_to_ft_in(length_m),
-                    "start_ft": [float(p1[0] * M_TO_FT), float(p1[1] * M_TO_FT)],
-                    "end_ft": [float(p2[0] * M_TO_FT), float(p2[1] * M_TO_FT)],
-                }
-            )
+            edges.append({
+                "length_ft_in": meters_to_ft_in(length_m),
+                "length_ft": round(length_m * M_TO_FT, 2),
+            })
 
         area_m2 = float(polygon_area_2d(xy_centered))
-        panel_payloads.append(
-            {
-                "id": int(pid),
-                "area_sqft": round(area_m2 * 10.7639104, 1),
-                "slope_rise": int(slope_rise_over_12(plane.normal)),
-                "azimuth_deg": round(float(azimuth_degrees(plane.normal)), 1),
-                "azimuth_label": _azimuth_label(
-                    float(azimuth_degrees(plane.normal))
-                ),
-                "perimeter_ft": round(
-                    sum(e["length_m"] for e in edges) * M_TO_FT, 2
-                ),
-                "vertex_count": int(len(xy_centered)),
-                "vertices_ft": [
-                    [float(p[0] * M_TO_FT), float(p[1] * M_TO_FT)]
-                    for p in xy_centered
-                ],
-                "edges": [
-                    {
-                        "length_ft_in": e["length_ft_in"],
-                        "length_ft": round(e["length_m"] * M_TO_FT, 2),
-                    }
-                    for e in edges
-                ],
-            }
-        )
 
-    # 7. Plan view for the aggregate diagram — all panels in world coords
-    plan_panels = []
-    for pid in sorted(polygons_3d.keys()):
-        poly = polygons_3d[pid]
-        # Just use raw xy from 3D polygon (top-down projection)
-        plan_panels.append(
-            {
-                "id": int(pid),
-                "vertices_ft": [
-                    [float(v[0] * M_TO_FT), float(v[1] * M_TO_FT)]
-                    for v in poly
-                ],
-            }
-        )
+        # Plan-view coords (world xy of 3D polygon, centered to roof)
+        plan_xy = poly_3d[:, :2]
+        plan_panels.append({
+            "id": pid,
+            "vertices_ft": [
+                [float(v[0] * M_TO_FT), float(v[1] * M_TO_FT)]
+                for v in plan_xy
+            ],
+        })
+
+        panel_payloads.append({
+            "id": pid,
+            "area_sqft": round(area_m2 * 10.7639104, 1),
+            "slope_rise": int(slope_rise_over_12(plane.normal)),
+            "azimuth_deg": round(float(azimuth_degrees(plane.normal)), 1),
+            "azimuth_label": _azimuth_label(
+                float(azimuth_degrees(plane.normal))
+            ),
+            "perimeter_ft": round(sum(e["length_ft"] for e in edges), 2),
+            "vertex_count": len(xy_centered),
+            "vertices_ft": [
+                [float(p[0] * M_TO_FT), float(p[1] * M_TO_FT)]
+                for p in xy_centered
+            ],
+            # World-space 3D vertices in feet — for the 3D isometric view
+            "vertices_3d_ft": [
+                [
+                    float(v[0] * M_TO_FT),
+                    float(v[1] * M_TO_FT),
+                    float(v[2] * M_TO_FT),
+                ]
+                for v in poly_3d
+            ],
+            "edges": edges,
+        })
 
     total_area_sqft = sum(p["area_sqft"] for p in panel_payloads)
 
