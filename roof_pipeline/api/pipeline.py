@@ -588,19 +588,36 @@ async def get_cutsheet_data(
             sample.get("meters_per_px") or 0.25
         )
 
-    # 5. For each user-clicked panel polygon, sample the DSM at the
-    #    clicked corners to build a clean 3D polygon (no rasterize +
-    #    contour-trace round-trip, which was producing pixel-aliased
-    #    "wavy" edges). User's clicks are authoritative.
+    # 5. For each user-clicked panel polygon:
+    #    (a) rasterize the polygon to a mask of *interior* pixels,
+    #    (b) fit the plane to a dense sample of those interior DSM pixels
+    #        (corners alone are the noisiest spot -- edge bleed from walls/
+    #        gutters/ground produces shallow or inconsistent fits),
+    #    (c) project each user corner onto the fitted plane so the returned
+    #        3D polygon is guaranteed planar (clean 3D view, no slivers).
+    #    Falls back to the old corner-only fit if the interior mask is
+    #    too small (tiny or mostly-NaN panels).
+    from skimage.draw import polygon as draw_polygon
+
     M_TO_FT = 3.280839895
+    MIN_INTERIOR_PIXELS = 8
 
     def sample_dsm(cx: float, cy: float) -> float:
         ix = max(0, min(w - 1, int(round(cx))))
         iy = max(0, min(h - 1, int(round(cy))))
         return float(dsm_arr[iy, ix])
 
+    def z_on_plane(x_m: float, y_m: float, plane: Plane) -> float:
+        """z such that normal . (x,y,z) = plane.d."""
+        nx, ny, nz = plane.normal
+        if abs(nz) < 1e-9:
+            return float(plane.centroid[2])
+        return float((plane.d - nx * x_m - ny * y_m) / nz)
+
     panel_payloads = []
     plan_panels = []
+
+    valid_dsm = ~np.isnan(dsm_arr)
 
     for i, user_panel in enumerate(panels):
         pid = i + 1
@@ -608,17 +625,45 @@ async def get_cutsheet_data(
         if len(corners_pix) < 3:
             continue
 
-        poly_3d_list = []
-        for cx, cy in corners_pix:
-            z = sample_dsm(float(cx), float(cy))
-            poly_3d_list.append([float(cx) * res_m, float(cy) * res_m, z])
-        poly_3d = np.array(poly_3d_list, dtype=np.float64)
+        # --- Interior pixel rasterization for the plane fit ---
+        cols_px = np.array([float(c[0]) for c in corners_pix])
+        rows_px = np.array([float(c[1]) for c in corners_pix])
+        rr, cc = draw_polygon(rows_px, cols_px, shape=(h, w))
+        keep = valid_dsm[rr, cc] if rr.size else np.zeros(0, dtype=bool)
+        rr_valid, cc_valid = rr[keep], cc[keep]
+
+        if rr_valid.size >= MIN_INTERIOR_PIXELS:
+            interior_xyz = np.column_stack([
+                cc_valid.astype(np.float64) * res_m,
+                rr_valid.astype(np.float64) * res_m,
+                dsm_arr[rr_valid, cc_valid],
+            ])
+            fit_source = interior_xyz
+        else:
+            # Degenerate panel -- tiny, off-DSM, or all-NaN. Fall back.
+            log.warning(
+                "panel %d has %d interior DSM pixels (<%d); falling back "
+                "to corner-only plane fit",
+                pid, int(rr_valid.size), MIN_INTERIOR_PIXELS,
+            )
+            fit_source = np.array([
+                [float(cx) * res_m, float(cy) * res_m, sample_dsm(float(cx), float(cy))]
+                for cx, cy in corners_pix
+            ], dtype=np.float64)
 
         try:
-            plane = fit_plane(poly_3d)
+            plane = fit_plane(fit_source)
         except Exception as exc:
             log.warning("fit_plane failed for panel %d: %s", pid, exc)
             continue
+
+        # --- Build corner 3D polygon from user clicks, projected onto the
+        # fitted plane so all vertices are exactly coplanar. ---
+        poly_3d = np.array([
+            [float(cx) * res_m, float(cy) * res_m,
+             z_on_plane(float(cx) * res_m, float(cy) * res_m, plane)]
+            for cx, cy in corners_pix
+        ], dtype=np.float64)
 
         # Rotate to horizontal for plan-view math
         R = rotation_to_horizontal(plane.normal)
