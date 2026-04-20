@@ -6,6 +6,7 @@ fabricator-facing PDF with:
     page 1  Panel Layout Plan          (ANSI B portrait)
     page 2  Edge / Trim Diagram        (Letter portrait)
     page 3  Sheet Cut List             (ANSI B landscape)
+                + Coil Requirements block (estimated OD / weight / lf)
     page 4  Combined Edge Detail       (ANSI B landscape)
 
 Public API: ``generate_shop_drawings(roof, output_path, trim_formulas=None)``.
@@ -26,6 +27,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas as pdfcanvas
 
+from .coil_calc import COIL_SPECS, DEFAULT_ID_IN, estimate_coils_for_cutsheet
 from .cutsheets import SQM_TO_SQFT, polygon_area_2d, rotation_to_horizontal
 from .planes import Plane
 
@@ -104,6 +106,114 @@ DEFAULT_TRIM_FORMULAS: dict[str, Callable[[dict[str, float]], float]] = {
     "PANEL STARTER": lambda t: t.get("ED", 0.0),
     "Z-FLASHING":    lambda t: t.get("RC", 0.0) + t.get("HC", 0.0) + t.get("VF", 0.0),
 }
+
+
+# Mapping of the display-friendly material/gauge strings we carry on the
+# roof dict into the canonical coil_calc.COIL_SPECS keys.
+_MATERIAL_ALIASES: dict[str, str] = {
+    "galvalume": "steel", "galvanized": "steel", "galvanized steel": "steel",
+    "steel": "steel", "painted steel": "steel", "g90": "steel",
+    "aluminum": "aluminum", "aluminium": "aluminum",
+    "copper": "copper",
+}
+
+
+def _normalize_material(raw: str) -> str:
+    """Collapse "GALVALUME" / "24 GA STEEL" style display strings to a
+    coil_calc.COIL_SPECS top-level key. Falls back to "steel"."""
+    if not raw:
+        return "steel"
+    key = raw.strip().lower()
+    if key in _MATERIAL_ALIASES:
+        return _MATERIAL_ALIASES[key]
+    for alias, canonical in _MATERIAL_ALIASES.items():
+        if alias in key:
+            return canonical
+    return "steel"
+
+
+def _normalize_gauge(raw: str, material: str) -> str:
+    """Collapse "24 GA" / "0.040" / "16 OZ" to a COIL_SPECS[material] key.
+
+    Falls back to the first gauge available for the material so the spec
+    lookup never raises in the PDF layer -- upstream should fix the input.
+    """
+    available = list(COIL_SPECS.get(material, {}).keys())
+    if not raw:
+        return available[0] if available else ""
+    key = "".join(ch for ch in raw.strip().lower() if ch.isalnum() or ch == ".")
+    for g in available:
+        g_key = "".join(ch for ch in g.lower() if ch.isalnum() or ch == ".")
+        if g_key in key or key in g_key:
+            return g
+    return available[0] if available else raw
+
+
+def _coil_rows_for_page3(roof: dict, total_sheet_lf: float) -> list[tuple[str, str]]:
+    """Build (label, value) rows for the COIL REQUIREMENTS box on page 3.
+
+    Pulls material / gauge / coverage / waste_pct off the roof dict, runs the
+    coil_calc inverse solver, and renders rows. Adds a second block for
+    secondary_profile when present.
+    """
+    material_display = str(roof.get("material", "GALVALUME"))
+    gauge_display = str(roof.get("gauge", "24 GA"))
+    material = _normalize_material(material_display)
+    gauge = _normalize_gauge(gauge_display, material)
+    width_in = float(roof.get("coverage_width_in", 24.0))
+    waste_pct = float(roof.get("waste_pct", 10.0))
+
+    groups: list[dict] = []
+    if total_sheet_lf > 0:
+        groups.append({
+            "material": material,
+            "gauge": gauge,
+            "width_in": width_in,
+            "linear_ft": total_sheet_lf,
+        })
+
+    sec = roof.get("secondary_profile")
+    sec_label = None
+    if isinstance(sec, dict):
+        sec_lf = float(sec.get("panel_lf", 0.0))
+        if sec_lf > 0:
+            sec_mat = _normalize_material(str(sec.get("material", material_display)))
+            sec_g = _normalize_gauge(str(sec.get("gauge", gauge_display)), sec_mat)
+            sec_w = float(sec.get("coverage_width_in", width_in))
+            groups.append({
+                "material": sec_mat, "gauge": sec_g,
+                "width_in": sec_w, "linear_ft": sec_lf,
+            })
+            sec_label = f"{sec_g} {sec_mat} @ {sec_w:.0f}\""
+
+    if not groups:
+        return [("(NO SHEETS)", "--")]
+
+    estimates = estimate_coils_for_cutsheet(
+        groups, waste_pct=waste_pct, id_in=DEFAULT_ID_IN,
+    )
+
+    rows: list[tuple[str, str]] = []
+    primary_label = f"{gauge} {material} @ {width_in:.0f}\""
+    labels = [primary_label, sec_label]
+    for i, est in enumerate(estimates):
+        if i > 0:
+            rows.append(("", ""))
+        header = labels[i] if i < len(labels) and labels[i] else f"COIL {i + 1}"
+        rows.append((header.upper(), ""))
+        if "error" in est:
+            rows.append(("  STATUS", str(est["error"]).upper()))
+            rows.append(("  LF NEEDED", feet_to_ft_in(est["linear_ft_needed"])))
+            continue
+        rows.append(("  RAW LF",    feet_to_ft_in(est["linear_ft_raw"])))
+        rows.append((f"  +{waste_pct:.0f}% WASTE",
+                     feet_to_ft_in(est["linear_ft_needed"])))
+        rows.append(("  REC. OD",   f"{est['od_in']:.1f}\""))
+        rows.append(("  ID",        f"{est['id_in']:.0f}\""))
+        rows.append(("  WRAPS",     f"{est['wraps']:.0f}"))
+        rows.append(("  SQFT",      f"{est['sqft']:.0f}"))
+        rows.append(("  WEIGHT",    f"{est['weight_lb']:.0f} lb"))
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -1354,6 +1464,15 @@ def _render_page3(
     ss_h = 24 + len(ss_rows) * 11
     ss_y = trim_y - 16 - ss_h
     _draw_text_box(c, col_x, ss_y, col_w, ss_h, "STANDING SEAM TRIM ITEMS", ss_rows)
+
+    # COIL REQUIREMENTS: installer-facing "what coil do I need to order?"
+    # block. Runs the coil_calc inverse solver on total_sheet_lf (primary +
+    # optional secondary) and prints OD / weight so the shop can pull stock.
+    coil_rows = _coil_rows_for_page3(roof, total_sheet_lf)
+    coil_h = 24 + len(coil_rows) * 11
+    coil_y = ss_y - 16 - coil_h
+    _draw_text_box(c, col_x, coil_y, col_w, coil_h,
+                   "COIL REQUIREMENTS", coil_rows)
 
     # ---- Panel grid: fills everything to the LEFT of the right column ----
     grid_x0 = 40
