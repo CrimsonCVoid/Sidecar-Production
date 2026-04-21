@@ -590,17 +590,33 @@ async def get_cutsheet_data(
 
     # 5. For each user-clicked panel polygon:
     #    (a) rasterize the polygon to a mask of *interior* pixels,
-    #    (b) fit the plane to a dense sample of those interior DSM pixels
-    #        (corners alone are the noisiest spot -- edge bleed from walls/
-    #        gutters/ground produces shallow or inconsistent fits),
-    #    (c) project each user corner onto the fitted plane so the returned
-    #        3D polygon is guaranteed planar (clean 3D view, no slivers).
-    #    Falls back to the old corner-only fit if the interior mask is
-    #    too small (tiny or mostly-NaN panels).
+    #    (b) erode the mask inward ~2 pixels to dodge DSM edge-bleed --
+    #        Google Solar's 0.1-0.5m DSMs are Gaussian-smoothed, so the
+    #        2-3 pixel ring just inside the user polygon is contaminated
+    #        with values that bleed from the wall / gutter / ground
+    #        outside. Sampling those values produces a fit that tilts
+    #        unrealistically steep (we've seen 24/12 for a true 4/12
+    #        panel when the polygon was drawn right at the eave),
+    #    (c) fit the plane to a dense sample of the eroded interior,
+    #    (d) project each user corner onto the fitted plane so the
+    #        returned 3D polygon is guaranteed planar.
+    #    Falls back to un-eroded sample when erosion leaves too few
+    #    pixels (small panels); falls back to corner-only when even the
+    #    un-eroded mask is empty.
+    from scipy.ndimage import binary_erosion
     from skimage.draw import polygon as draw_polygon
 
     M_TO_FT = 3.280839895
     MIN_INTERIOR_PIXELS = 8
+    # Erosion depth in pixels. 2px ≈ 0.5 m at Google Solar HIGH quality
+    # (0.1 m res) or ~1 m at LOW quality (0.5 m res) — enough to skip
+    # the smoothed boundary ring regardless of imagery quality.
+    EDGE_BLEED_ERODE_PX = 2
+    # If fitted slope exceeds this, log a warning with the most likely
+    # cause so the user can see it and re-label. 18/12 (56° pitch) is
+    # the top end of real metal-roofing practice; anything steeper is
+    # almost always DSM noise rather than real geometry.
+    MAX_SANE_RISE_OVER_12 = 18
 
     def sample_dsm(cx: float, cy: float) -> float:
         ix = max(0, min(w - 1, int(round(cx))))
@@ -629,33 +645,77 @@ async def get_cutsheet_data(
         cols_px = np.array([float(c[0]) for c in corners_pix])
         rows_px = np.array([float(c[1]) for c in corners_pix])
         rr, cc = draw_polygon(rows_px, cols_px, shape=(h, w))
-        keep = valid_dsm[rr, cc] if rr.size else np.zeros(0, dtype=bool)
-        rr_valid, cc_valid = rr[keep], cc[keep]
+        if rr.size == 0:
+            log.warning("panel %d: empty rasterization, skipping", pid)
+            continue
 
-        if rr_valid.size >= MIN_INTERIOR_PIXELS:
-            interior_xyz = np.column_stack([
-                cc_valid.astype(np.float64) * res_m,
-                rr_valid.astype(np.float64) * res_m,
-                dsm_arr[rr_valid, cc_valid],
+        # Build a 2D boolean mask for erosion.
+        full_mask = np.zeros((h, w), dtype=bool)
+        full_mask[rr, cc] = True
+        full_mask &= valid_dsm  # drop NaN cells
+
+        # Erode to avoid DSM edge-bleed. If erosion wipes out too many
+        # pixels (thin panels where the entire strip is within the
+        # bleed zone), fall back to the un-eroded mask.
+        eroded_mask = binary_erosion(full_mask, iterations=EDGE_BLEED_ERODE_PX)
+        sample_mask = eroded_mask
+        used_erosion = True
+        if eroded_mask.sum() < MIN_INTERIOR_PIXELS:
+            if full_mask.sum() >= MIN_INTERIOR_PIXELS:
+                log.warning(
+                    "panel %d: erosion left only %d px (too thin); using "
+                    "un-eroded interior — expect slope noise near edges",
+                    pid, int(eroded_mask.sum()),
+                )
+                sample_mask = full_mask
+                used_erosion = False
+            else:
+                # Panel is tiny or mostly off-DSM; fall back to corners.
+                log.warning(
+                    "panel %d: %d interior DSM pixels (<%d); falling back "
+                    "to corner-only plane fit",
+                    pid, int(full_mask.sum()), MIN_INTERIOR_PIXELS,
+                )
+                fit_source = np.array([
+                    [float(cx) * res_m, float(cy) * res_m,
+                     sample_dsm(float(cx), float(cy))]
+                    for cx, cy in corners_pix
+                ], dtype=np.float64)
+                sample_mask = None
+
+        if sample_mask is not None:
+            rr_s, cc_s = np.nonzero(sample_mask)
+            fit_source = np.column_stack([
+                cc_s.astype(np.float64) * res_m,
+                rr_s.astype(np.float64) * res_m,
+                dsm_arr[rr_s, cc_s],
             ])
-            fit_source = interior_xyz
-        else:
-            # Degenerate panel -- tiny, off-DSM, or all-NaN. Fall back.
-            log.warning(
-                "panel %d has %d interior DSM pixels (<%d); falling back "
-                "to corner-only plane fit",
-                pid, int(rr_valid.size), MIN_INTERIOR_PIXELS,
+            log.info(
+                "panel %d: plane fit on %d %s interior pixels",
+                pid, int(sample_mask.sum()),
+                "eroded" if used_erosion else "full",
             )
-            fit_source = np.array([
-                [float(cx) * res_m, float(cy) * res_m, sample_dsm(float(cx), float(cy))]
-                for cx, cy in corners_pix
-            ], dtype=np.float64)
 
         try:
             plane = fit_plane(fit_source)
         except Exception as exc:
             log.warning("fit_plane failed for panel %d: %s", pid, exc)
             continue
+
+        # Slope sanity check. If the fit still comes back absurdly steep
+        # after erosion, it's almost always DSM noise near an edge the
+        # user couldn't see — not real geometry. Log loudly so it shows
+        # up in server logs and the user can re-label tighter.
+        fitted_rise = int(slope_rise_over_12(plane.normal))
+        if fitted_rise >= MAX_SANE_RISE_OVER_12:
+            log.warning(
+                "panel %d: fitted slope %d/12 exceeds sane max (%d/12). "
+                "Likely cause: polygon drawn too close to the roof edge "
+                "and DSM smoothing is bleeding wall/ground elevations "
+                "into the sample. Suggest re-labeling with corners pulled "
+                "~1 ft inboard from gutter/rake.",
+                pid, fitted_rise, MAX_SANE_RISE_OVER_12,
+            )
 
         # --- Build corner 3D polygon from user clicks, projected onto the
         # fitted plane so all vertices are exactly coplanar. ---
