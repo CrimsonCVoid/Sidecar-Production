@@ -155,11 +155,16 @@ def query_tnm(lat: float, lng: float, bbox_m: float) -> list[dict]:
     return items
 
 
-def pick_best_tile(items: list[dict]) -> dict:
+def pick_best_tile(items: list[dict], max_age_years: float = MAX_AGE_YEARS) -> dict:
     """Rank TNM items and pick the best one (or fail if nothing qualifies).
 
-    Scoring favours recent, high-QL data. We reject tiles older than 5
-    years and QL worse than 2 — per the GSD brief's hard-fail criteria.
+    Scoring favours recent, high-QL data. Tiles older than ``max_age_years``
+    or QL worse than 2 are rejected. For the NC Triangle the only indexed
+    LiDAR is the 2014 statewide QL2 collection, so the default of 5 will
+    hard-fail — pass ``--max-age-years 12`` to allow that data. The
+    geometric-accuracy case the spike is testing doesn't depend on capture
+    freshness, but stale data can mean the house's footprint no longer
+    matches reality (additions, teardowns), so we keep the default strict.
     """
     if not items:
         raise SystemExit(
@@ -203,10 +208,11 @@ def pick_best_tile(items: list[dict]) -> dict:
     best_score, _, best_meta = ranked[0]
 
     # Enforce hard-fail criteria against the *best* candidate.
-    if best_meta["age_years"] > MAX_AGE_YEARS:
+    if best_meta["age_years"] > max_age_years:
         raise SystemExit(
             f"ERROR: best 3DEP tile is {best_meta['age_years']:.1f} years old "
-            f"(>{MAX_AGE_YEARS}). Refusing to produce a stale benchmark."
+            f"(>{max_age_years}). Pass --max-age-years to override, or skip "
+            "this address."
         )
     ql_num = _ql_rank(best_meta["qualityLevel"])
     if ql_num is None:
@@ -494,6 +500,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cache-dir", type=Path,
                         default=Path(__file__).parent / "output" / "_laz_cache",
                         help="where downloaded LAZ tiles are cached")
+    parser.add_argument("--max-age-years", type=float, default=MAX_AGE_YEARS,
+                        help=f"reject tiles older than this (default {MAX_AGE_YEARS}). "
+                        "Triangle/Apex NC only has 2014 data — use 12 there.")
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -510,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 2. Discover the best 3DEP tile at this location
     items = query_tnm(lat, lng, args.radius)
-    best = pick_best_tile(items)
+    best = pick_best_tile(items, max_age_years=args.max_age_years)
 
     # 3. Download LAZ (cached across re-runs)
     laz_name = Path(best["downloadURL"]).name or "tile.laz"
