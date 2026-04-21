@@ -136,8 +136,10 @@ def require_principal(
 
     Precedence:
       1. ``X-Internal-API-Key`` matching the configured secret → internal principal
-      2. ``Authorization: Bearer <jwt>`` with a valid Supabase JWT → user principal
-      3. ``dev_allow_unauth`` is set AND the request came from loopback → internal
+      2. ``dev_allow_unauth`` is set AND the request came from loopback → internal
+         (runs before JWT so a browser's stale session token can't trip a 503
+          when supabase_jwt_secret is unset on a dev box)
+      3. ``Authorization: Bearer <jwt>`` with a valid Supabase JWT → user principal
       4. Otherwise → 401
 
     Explicitly: an *invalid* internal key header is still checked, but it
@@ -153,14 +155,12 @@ def require_principal(
     ):
         return Principal(kind="internal", user_id=None)
 
-    # 2. Supabase JWT
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        if token:
-            user_id = _verify_supabase_jwt(token, settings)
-            return Principal(kind="user", user_id=user_id)
-
-    # 3. Dev escape hatch — loopback only
+    # 2. Dev escape hatch — loopback only. Runs BEFORE the JWT path so a
+    #    browser that happens to attach a Supabase session token (from a
+    #    logged-in dashboard tab) doesn't force JWT verification when the
+    #    dev box hasn't configured supabase_jwt_secret. In prod with
+    #    dev_allow_unauth=false, this branch is dead and JWT verification
+    #    is mandatory.
     if settings.dev_allow_unauth and _is_localhost_request(request):
         log.warning(
             "DEV_ALLOW_UNAUTH bypassing auth for %s %s from %s",
@@ -169,6 +169,13 @@ def require_principal(
             request.client.host if request.client else "?",
         )
         return Principal(kind="internal", user_id=None)
+
+    # 3. Supabase JWT
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        if token:
+            user_id = _verify_supabase_jwt(token, settings)
+            return Principal(kind="user", user_id=user_id)
 
     raise HTTPException(status_code=401, detail="Authentication required")
 
