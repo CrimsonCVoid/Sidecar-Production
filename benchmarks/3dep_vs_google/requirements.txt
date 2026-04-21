@@ -1,0 +1,14 @@
+# Benchmark-only dependencies. These are NOT promoted to the root
+# requirements.txt of the roof_pipeline package. Install in the same
+# virtualenv as roof_pipeline so `import roof_pipeline.planes` works
+# from compare.py:
+#
+#   pip install -r requirements.txt
+#   pip install -r benchmarks/3dep_vs_google/requirements.txt
+#
+# The benchmark relies on laspy+lazrs (pure-Python LAZ reader via a Rust
+# backend) instead of PDAL so there is no C-library system dependency.
+
+laspy[lazrs]>=2.5.3
+pyproj>=3.6
+tqdm>=4.66

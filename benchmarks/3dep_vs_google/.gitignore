@@ -1,0 +1,15 @@
+# Big LAZ tiles, rasterized outputs, and ad-hoc comparison reports.
+# Regenerable from the upstream APIs — no reason to bloat the repo. The
+# scripts create these directories at runtime via mkdir(parents=True),
+# so they don't need to exist in the tree.
+#
+# Note: the root-level .gitignore also excludes `output/`, which applies
+# here too. This local rule is defensive belt-and-suspenders.
+output/*
+results/*
+
+# Ground-truth files are optional and often contain client-identifying
+# addresses and tape-measure survey numbers. Keep them out of the repo
+# by default; commit individual files explicitly if safe.
+ground_truth/*.json
+!ground_truth/.gitkeep
