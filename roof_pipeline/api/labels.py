@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import Client
 
-from .deps import get_supabase
+from .deps import Principal, get_supabase, require_principal, verify_sample_access
 from .schemas import LabelData
 
 log = logging.getLogger(__name__)
@@ -33,12 +33,14 @@ async def save_labels(
     body: LabelData,
     request: Request,
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Persist panel label data for a sample (API-03).
 
     Upserts into training_labels: stores panels as annotations jsonb.
     """
     request.state.sample_id = sample_id
+    verify_sample_access(principal, sample_id, supabase)
 
     now = datetime.now(timezone.utc).isoformat()
 
@@ -82,6 +84,7 @@ async def get_labels(
     sample_id: str,
     request: Request,
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Retrieve panel label data for a sample (API-03).
 
@@ -89,6 +92,7 @@ async def get_labels(
     Returns 404 if no labels exist for the sample.
     """
     request.state.sample_id = sample_id
+    verify_sample_access(principal, sample_id, supabase)
 
     result = (
         supabase.table("training_labels")

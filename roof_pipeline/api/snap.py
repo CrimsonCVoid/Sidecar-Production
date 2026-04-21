@@ -6,11 +6,12 @@ import asyncio
 import logging
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..panel_snap_v2 import snap_polygons
 from ..panel_snap_v2.schema import PanelsInput
 from ..planes import Plane
+from .deps import Principal, require_principal
 from .schemas import SnapPreviewResponse
 
 log = logging.getLogger(__name__)
@@ -56,13 +57,22 @@ def _planes_from_clicks(panels_input: PanelsInput) -> tuple[dict[int, np.ndarray
 
 
 @router.post("/preview", response_model=SnapPreviewResponse)
-async def snap_preview(body: PanelsInput, request: Request):
+async def snap_preview(
+    body: PanelsInput,
+    request: Request,
+    principal: Principal = Depends(require_principal),
+):
     """Snap polygons and return feature graph + snapped coordinates (API-01).
 
     Accepts PanelsInput (mask.json format), builds flat-plane approximations,
     runs snap_polygons, returns the feature graph and snapped polygon arrays.
     Target: <500ms for 12-panel roof.
     """
+    # Stateless compute on caller-supplied polygons — no sample_id, no DB
+    # touches. Still auth-gated so random callers can't pin the CPU: the
+    # snap engine is O(P^2 E^2) and a large body can burn real cycles.
+    del principal  # used only for its side effect of requiring auth
+
     # Set sample_id on request state for structured logging
     request.state.sample_id = f"preview-{len(body.panels)}panels"
 

@@ -52,12 +52,23 @@ except Exception:
 # ---------------------------------------------------------------------------
 # CORS (T-04-01)
 # ---------------------------------------------------------------------------
+# CORS hardening (H-3, 2026-04-21 audit): was `allow_methods=["*"]` /
+# `allow_headers=["*"]` with credentials on. Explicit allowlists now —
+# any new method/header must be added deliberately. allow_credentials stays
+# on because the Next.js proxy may forward cookies for session refresh.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Internal-API-Key",
+        "X-Requested-With",
+    ],
+    expose_headers=["X-Trace-ID"],
+    max_age=600,
 )
 
 
@@ -85,16 +96,23 @@ app.include_router(pdf_router, prefix="/api/pdf", tags=["pdf"])
 # ---------------------------------------------------------------------------
 # Global exception handlers (T-04-03 -- no traceback leak)
 # ---------------------------------------------------------------------------
+# Exception-message hardening (H-2, 2026-04-21 audit): prior handlers echoed
+# `str(exc)` into the response body. For Supabase exceptions that leaked
+# internal schema names; for generic exceptions it could leak file paths,
+# stack fragments, or connection strings. Now: the real message is logged
+# server-side with the trace_id; the client gets a generic string plus the
+# trace_id so we can correlate. Pydantic validation errors (422 from
+# FastAPI's own handler) still surface field-level detail, which is safe.
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     """Return 422 for input validation errors."""
     trace_id = getattr(request.state, "trace_id", None)
-    log.exception("ValueError in %s", request.url.path)
+    log.exception("ValueError in %s (trace=%s): %s", request.url.path, trace_id, exc)
     return JSONResponse(
         status_code=422,
         content=ErrorResponse(
             error_type="ValueError",
-            message=str(exc),
+            message="Invalid input",
             trace_id=trace_id,
         ).model_dump(),
     )
@@ -104,12 +122,12 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
 async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResponse:
     """Return 500 for runtime / algorithmic failures."""
     trace_id = getattr(request.state, "trace_id", None)
-    log.exception("RuntimeError in %s", request.url.path)
+    log.exception("RuntimeError in %s (trace=%s): %s", request.url.path, trace_id, exc)
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(
             error_type="RuntimeError",
-            message=str(exc),
+            message="Internal error",
             trace_id=trace_id,
         ).model_dump(),
     )
@@ -119,12 +137,18 @@ async def runtime_error_handler(request: Request, exc: RuntimeError) -> JSONResp
 async def generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Catch-all -- return 500 with generic message, log full traceback."""
     trace_id = getattr(request.state, "trace_id", None)
-    log.exception("Unhandled %s in %s", type(exc).__name__, request.url.path)
+    log.exception(
+        "Unhandled %s in %s (trace=%s): %s",
+        type(exc).__name__,
+        request.url.path,
+        trace_id,
+        exc,
+    )
     return JSONResponse(
         status_code=500,
         content=ErrorResponse(
-            error_type=type(exc).__name__,
-            message=str(exc),
+            error_type="InternalError",
+            message="Internal error",
             trace_id=trace_id,
         ).model_dump(),
     )

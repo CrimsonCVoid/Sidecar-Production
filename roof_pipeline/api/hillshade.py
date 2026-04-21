@@ -16,7 +16,7 @@ from PIL import Image
 from supabase import Client
 
 from .config import Settings
-from .deps import get_settings, get_supabase
+from .deps import Principal, get_settings, get_supabase, require_principal, verify_sample_access
 
 log = logging.getLogger(__name__)
 
@@ -117,8 +117,10 @@ async def get_hillshade(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Render and return a hillshade PNG for a training sample's DSM."""
+    verify_sample_access(principal, sample_id, supabase)
     dsm_arr = _load_dsm(supabase, settings, sample_id)
     shade = _render_hillshade(dsm_arr)
     png_bytes = _to_png(shade)
@@ -135,8 +137,10 @@ async def get_rgb(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Return the satellite RGB image as PNG for a training sample."""
+    verify_sample_access(principal, sample_id, supabase)
     result = (
         supabase.table("training_samples")
         .select("rgb_storage_path")
@@ -189,8 +193,10 @@ async def get_heatmap(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Render and return a DSM elevation heatmap PNG (inferno colormap, RGBA)."""
+    verify_sample_access(principal, sample_id, supabase)
     dsm_arr = _load_dsm(supabase, settings, sample_id)
     heatmap = _render_heatmap(dsm_arr)
     png_bytes = _to_png(heatmap)

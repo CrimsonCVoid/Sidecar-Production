@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from supabase import Client
 
 from .config import Settings
-from .deps import get_settings, get_supabase
+from .deps import Principal, get_settings, get_supabase, require_principal
 
 log = logging.getLogger(__name__)
 
@@ -128,6 +128,7 @@ async def ingest_address(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Geocode an address, download Solar API data, create a training sample.
 
@@ -137,7 +138,15 @@ async def ingest_address(
     4. Upload to Supabase Storage
     5. Insert training_samples row
     6. Return sample_id for redirect to labeler
+
+    Auth: any authenticated principal may ingest (creates a new sample).
+    Downstream ownership is enforced on the per-sample endpoints via
+    verify_sample_access — a user who ingests a sample can only access
+    it if it's been linked to a project they own, which happens out of
+    band via the Next.js snapshot flow.
     """
+    del principal  # auth-gate only
+
     api_key = settings.google_solar_api_key
     if not api_key:
         raise HTTPException(status_code=500, detail="GOOGLE_SOLAR_API_KEY not configured")

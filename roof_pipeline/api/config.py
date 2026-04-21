@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     supabase_url: str
     supabase_anon_key: str
     supabase_service_role_key: str
+    supabase_jwt_secret: str = ""  # HS256 shared secret used to sign Supabase JWTs (legacy "JWT secret" in project settings). Required for browser-direct auth.
     google_solar_api_key: str = ""
     cors_origins: list[str] = ["http://localhost:3000"]
     storage_bucket: str = "pipeline-outputs"
@@ -33,3 +34,4 @@ class Settings(BaseSettings):
     pdf_output_bucket: str = "pdf-outputs"
     pdf_signed_url_ttl_seconds: int = 3600
     internal_api_key: str = ""  # Shared secret between Next.js proxy and this sidecar
+    dev_allow_unauth: bool = False  # If true, accepts unauth'd requests from localhost only. Dev tooling escape hatch — never set in prod.

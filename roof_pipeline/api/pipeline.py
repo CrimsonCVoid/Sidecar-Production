@@ -20,7 +20,13 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from supabase import Client
 
 from ..run_real import _load_dsm, run_pipeline
-from .deps import get_settings, get_supabase
+from .deps import (
+    Principal,
+    get_settings,
+    get_supabase,
+    require_principal,
+    verify_sample_access,
+)
 from .config import Settings
 from .schemas import PipelineRunCreated, PipelineRunRequest, PipelineRunStatus
 
@@ -221,13 +227,24 @@ async def _run_pipeline_bg(
 
 
 @router.get("/samples")
-async def list_samples(request: Request):
+async def list_samples(
+    request: Request,
+    principal: Principal = Depends(require_principal),
+):
     """List all samples with their latest pipeline run status (DIDX-01).
 
     Returns each sample joined with the most recent pipeline_runs row
     so the dashboard can show address, panel count, and run status.
     Gracefully returns an empty list when Supabase credentials are missing.
+
+    Auth: this is an admin-shaped endpoint (returns every sample). Only
+    the internal proxy principal may call it — user-JWT callers get 403.
+    Per-user sample listing should go through the Next.js /api/projects
+    route, which is scoped by org membership.
     """
+    if principal.kind != "internal":
+        raise HTTPException(status_code=403, detail="Forbidden")
+
     try:
         settings = Settings()
     except Exception:
@@ -292,6 +309,7 @@ async def trigger_pipeline_run(
     request: Request,
     supabase: Client = Depends(get_supabase),
     settings: Settings = Depends(get_settings),
+    principal: Principal = Depends(require_principal),
 ):
     """Trigger a full pipeline run as a background task (API-02, D-09).
 
@@ -299,6 +317,7 @@ async def trigger_pipeline_run(
     The pipeline runs asynchronously and writes status updates to the
     pipeline_runs Supabase table at each stage boundary.
     """
+    verify_sample_access(principal, body.sample_id, supabase)
     request.state.sample_id = body.sample_id
 
     run_id = str(uuid.uuid4())
@@ -334,6 +353,7 @@ async def get_run_status(
     run_id: str,
     request: Request,
     supabase: Client = Depends(get_supabase),
+    principal: Principal = Depends(require_principal),
 ):
     """Get current status of a pipeline run (API-02).
 
@@ -345,6 +365,8 @@ async def get_run_status(
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     row = result.data[0]
+    # Ownership chain: run_id → sample_id → projects ownership.
+    verify_sample_access(principal, row["sample_id"], supabase)
     return PipelineRunStatus(
         id=row["id"],
         sample_id=row["sample_id"],
@@ -363,6 +385,7 @@ async def generate_pdf(
     request: Request,
     supabase: Client = Depends(get_supabase),
     settings: Settings = Depends(get_settings),
+    principal: Principal = Depends(require_principal),
 ):
     """Generate a PDF from saved labels for a sample.
 
@@ -372,6 +395,7 @@ async def generate_pdf(
     from fastapi.responses import Response
     from io import BytesIO
 
+    verify_sample_access(principal, sample_id, supabase)
     request.state.sample_id = sample_id
 
     # 1. Get labels from DB
@@ -511,6 +535,7 @@ async def get_cutsheet_data(
     request: Request,
     supabase: Client = Depends(get_supabase),
     settings: Settings = Depends(get_settings),
+    principal: Principal = Depends(require_principal),
 ):
     """Return the structured data that powers the cutsheet PDF, as JSON.
 
@@ -530,6 +555,7 @@ async def get_cutsheet_data(
     )
     from ..planes import Plane, fit_plane
 
+    verify_sample_access(principal, sample_id, supabase)
     request.state.sample_id = sample_id
 
     # 1. Labels
