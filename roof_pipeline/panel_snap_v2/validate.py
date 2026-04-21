@@ -98,11 +98,13 @@ def _reconstruct_3d(
     return result_3d
 
 
-def _extract_largest_polygon(geom, pid: int) -> Polygon:
+def _extract_largest_polygon(geom, pid: int) -> Polygon | None:
     """Extract the largest Polygon from a geometry result.
 
     Handles MultiPolygon, GeometryCollection, and plain Polygon.
-    Applies D-06 ratio check for MultiPolygon cases.
+    Applies D-06 ratio check for MultiPolygon cases. Returns None when
+    the input degraded to a non-polygon type (LineString / Point) --
+    caller should fall back to the pre-repair polygon.
     """
     if isinstance(geom, Polygon):
         return geom
@@ -143,11 +145,17 @@ def _extract_largest_polygon(geom, pid: int) -> Polygon:
         )
         return largest
 
-    # Fallback: try to use as-is if it's a polygon-like geometry
-    raise RuntimeError(
-        f"panel {pid}: make_valid returned unexpected type "
-        f"{type(geom).__name__}"
+    # LineString / Point / empty -- the source polygon had fewer than 3
+    # distinct vertices, so make_valid correctly degraded it. Nothing
+    # polygon-like to recover; signal to the caller by returning None so
+    # it can fall back to the pre-repair polygon instead of crashing the
+    # whole pipeline on a single bad panel.
+    log.warning(
+        "panel %d: make_valid returned %s (degenerate geometry); "
+        "keeping pre-repair polygon and continuing",
+        pid, type(geom).__name__,
     )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +227,14 @@ def validate_polygons(
         # 5. D-06: Handle MultiPolygon / GeometryCollection.
         # ------------------------------------------------------------------
         repaired_poly = _extract_largest_polygon(repaired_geom, pid)
+
+        # Panel collapsed to a non-polygon (LineString / Point) -- the
+        # pre-repair coords are already in `out[pid]`; leave them alone
+        # and skip the rest of the repair work for this panel. The
+        # downstream mesh builder may drop the panel if it's degenerate,
+        # but the rest of the roof still renders.
+        if repaired_poly is None:
+            continue
 
         # ------------------------------------------------------------------
         # 6. D-05: Area change check.
