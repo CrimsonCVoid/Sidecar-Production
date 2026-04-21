@@ -54,17 +54,37 @@ def build_roof_mesh(
     polygons: dict[int, np.ndarray],
     planes: dict[int, Plane],
 ) -> trimesh.Trimesh:
-    """Build one trimesh from all panel polygons, tagged with panel IDs."""
+    """Build one trimesh from all panel polygons, tagged with panel IDs.
+
+    Degenerate polygons (all collinear vertices, < 3 distinct points --
+    e.g. panels that collapsed during snap_v2 densify) produce zero
+    triangles under earcut. We log a warning and skip those panels so
+    the rest of the roof still renders; the alternative is to crash
+    the whole PDF generation on one bad panel.
+    """
     sub_meshes = []
+    skipped: list[int] = []
     for pid, verts in polygons.items():
         plane = planes[pid]
-        faces = _triangulate_polygon(verts, plane)
+        try:
+            faces = _triangulate_polygon(verts, plane)
+        except RuntimeError as exc:
+            log.warning(
+                "panel %d: skipping — %s", pid, exc,
+            )
+            skipped.append(pid)
+            continue
         mesh = trimesh.Trimesh(vertices=verts, faces=faces, process=False)
         # Stash the panel ID per-face for downstream use (e.g. coloring)
         mesh.metadata["panel_id"] = pid
         sub_meshes.append(mesh)
         log.info("panel %d: %d triangles", pid, faces.shape[0])
 
+    if skipped:
+        log.warning(
+            "build_roof_mesh: skipped %d degenerate panel(s): %s",
+            len(skipped), skipped,
+        )
     if not sub_meshes:
         raise RuntimeError("no panels to mesh")
 
