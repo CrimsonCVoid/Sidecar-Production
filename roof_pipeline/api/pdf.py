@@ -565,7 +565,219 @@ def _render_proposal_builder_pdf(data: dict, out: Path) -> None:
     c.setFillColorRGB(ar, ag, ab)
     c.rect(0, 0, pw, 3 * mm, fill=1, stroke=0)
 
+    # If the caller supplied a signature payload, append the signature
+    # block + Certificate of Completion page. Compliant with US ESIGN
+    # Act / UETA: captures intent, identity (OTP), and record integrity
+    # (document hash).
+    signature = data.get("signature") or {}
+    if signature:
+        _append_signature_page(c, pw, ph, ml, mr, signature, data,
+                                ar, ag, ab)
+
     c.save()
+
+
+def _decode_data_url(url: str) -> tuple[str | None, bytes | None]:
+    """Return (mime, raw_bytes) for a data: URL, or (None, None)."""
+    import base64
+    if not url or not url.startswith("data:"):
+        return None, None
+    try:
+        header, payload = url.split(",", 1)
+        mime = header.split(";")[0].removeprefix("data:")
+        if ";base64" in header:
+            return mime, base64.b64decode(payload)
+        # Raw/urlencoded -- decode the percent-escapes.
+        from urllib.parse import unquote
+        return mime, unquote(payload).encode("utf-8")
+    except Exception:
+        return None, None
+
+
+def _append_signature_page(
+    c: pdfcanvas.Canvas, pw: float, ph: float,
+    ml: float, mr: float, signature: dict, data: dict,
+    ar: float, ag: float, ab: float,
+) -> None:
+    """Render a Certificate of Completion page with the signature block
+    and full ESIGN/UETA audit trail. Called after the main proposal page
+    in _render_proposal_builder_pdf when `signature` is present in the
+    payload."""
+    from io import BytesIO
+    from reportlab.lib.utils import ImageReader
+
+    c.showPage()
+    c.setPageSize(letter)
+
+    # Header stripe
+    c.setFillColorRGB(ar, ag, ab)
+    c.rect(0, ph - 4 * mm, pw, 4 * mm, fill=1, stroke=0)
+
+    y = ph - 18 * mm
+    c.setFillColorRGB(0.12, 0.12, 0.12)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(ml, y, "Certificate of Completion")
+    y -= 6 * mm
+    c.setFont("Helvetica", 9)
+    c.setFillColorRGB(0.4, 0.4, 0.4)
+    c.drawString(
+        ml, y,
+        "Electronic signature record — US ESIGN Act and UETA compliant",
+    )
+    y -= 10 * mm
+
+    # --- Signature block --------------------------------------------------
+    c.setFillColorRGB(0.12, 0.12, 0.12)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(ml, y, "Signed by")
+    y -= 5 * mm
+
+    signer_name = str(signature.get("signerName", "(unknown)"))
+    c.setFont("Helvetica", 14)
+    c.drawString(ml, y, signer_name)
+    y -= 4 * mm
+    c.setFont("Helvetica", 8)
+    c.setFillColorRGB(0.5, 0.5, 0.5)
+    c.drawString(ml, y, str(signature.get("signerEmail", "")))
+    y -= 8 * mm
+
+    # Embed signature image (PNG for drawn, render text for typed SVG).
+    sig_url = str(signature.get("signatureDataUrl") or "")
+    sig_method = str(signature.get("signatureMethod") or "drawn")
+    mime, raw = _decode_data_url(sig_url)
+    box_w, box_h = 90 * mm, 22 * mm
+    # Signature box (subtle bordered region with a baseline)
+    c.setStrokeColorRGB(0.85, 0.85, 0.85)
+    c.setLineWidth(0.5)
+    c.rect(ml, y - box_h, box_w, box_h, fill=0, stroke=1)
+    c.setStrokeColorRGB(0.75, 0.75, 0.75)
+    c.line(ml + 6, y - box_h + 4 * mm, ml + box_w - 6, y - box_h + 4 * mm)
+
+    if raw and mime and "png" in mime:
+        try:
+            c.drawImage(
+                ImageReader(BytesIO(raw)),
+                ml + 4, y - box_h + 5 * mm,
+                width=box_w - 8, height=box_h - 8 * mm,
+                preserveAspectRatio=True, mask="auto",
+            )
+        except Exception:
+            # Fall through to typed-style name rendering
+            c.setFont("Helvetica-Oblique", 22)
+            c.setFillColorRGB(0.12, 0.12, 0.12)
+            c.drawString(ml + 6, y - box_h + 10 * mm, signer_name)
+    else:
+        # Typed signature: render the name in an italic script
+        c.setFont("Helvetica-Oblique", 22)
+        c.setFillColorRGB(0.12, 0.12, 0.12)
+        c.drawString(ml + 6, y - box_h + 10 * mm, signer_name)
+
+    c.setFont("Helvetica", 7)
+    c.setFillColorRGB(0.6, 0.6, 0.6)
+    c.drawString(
+        ml, y - box_h - 3 * mm,
+        f"Signature method: {sig_method}",
+    )
+    y -= box_h + 10 * mm
+
+    # --- Audit trail table -----------------------------------------------
+    c.setFillColorRGB(0.12, 0.12, 0.12)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(ml, y, "Audit Trail")
+    y -= 6 * mm
+
+    signed_at = str(signature.get("signedAt", ""))
+    otp_at = str(signature.get("otpVerifiedAt", ""))
+    ip = str(signature.get("signerIp", ""))
+    ua = str(signature.get("signerUa", ""))
+    doc_hash = str(signature.get("documentHash", ""))
+    consent_ver = str(signature.get("consentTextVersion", "v1"))
+
+    rows = [
+        ("Signed at", signed_at),
+        ("Email verified at", otp_at),
+        ("Signer IP", ip or "(not recorded)"),
+        ("User agent", (ua[:80] + "…") if len(ua) > 80 else ua),
+        ("Document hash (SHA-256)", doc_hash),
+        ("Consent text version", consent_ver),
+        ("Proposal #", str(data.get("proposalNumber", "—"))),
+        ("Project", str(data.get("projectName", "—"))),
+    ]
+    label_w = 52 * mm
+    c.setFont("Helvetica", 8)
+    for label, val in rows:
+        c.setFillColorRGB(0.45, 0.45, 0.45)
+        c.drawString(ml, y, label)
+        c.setFillColorRGB(0.18, 0.18, 0.18)
+        # doc_hash is long; wrap or truncate with tail visible
+        val_str = str(val)
+        if len(val_str) > 72 and label != "Document hash (SHA-256)":
+            val_str = val_str[:72] + "…"
+        c.drawString(ml + label_w, y, val_str)
+        y -= 4.5 * mm
+    y -= 3 * mm
+
+    # --- Consent acknowledgments -----------------------------------------
+    c.setFillColorRGB(0.12, 0.12, 0.12)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(ml, y, "Consent Acknowledgments")
+    y -= 5 * mm
+
+    consents = [
+        (
+            "✓ Intent to sign electronically",
+            "Signer affirmatively consented to conduct this transaction by "
+            "electronic means. Their electronic signature is the legal "
+            "equivalent of a handwritten signature under the ESIGN Act and UETA.",
+        ),
+        (
+            "✓ Agreed to the proposal",
+            "Signer acknowledged reviewing the proposal above and understands "
+            "this is a binding document.",
+        ),
+    ]
+    c.setFont("Helvetica", 8)
+    for head, body in consents:
+        c.setFillColorRGB(0.05, 0.55, 0.35)
+        c.drawString(ml, y, head)
+        y -= 4 * mm
+        c.setFillColorRGB(0.35, 0.35, 0.35)
+        # Simple word wrap at ~95 chars.
+        words = body.split()
+        line = ""
+        for w in words:
+            trial = (line + " " + w).strip()
+            if len(trial) > 100:
+                c.drawString(ml + 4 * mm, y, line)
+                y -= 3.5 * mm
+                line = w
+            else:
+                line = trial
+        if line:
+            c.drawString(ml + 4 * mm, y, line)
+            y -= 3.5 * mm
+        y -= 2 * mm
+
+    # --- Integrity seal ---------------------------------------------------
+    c.setFillColorRGB(ar, ag, ab)
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(ml, 22 * mm,
+                 "Integrity: modifications to this document after signing "
+                 "invalidate the signature.")
+    c.setFillColorRGB(0.55, 0.55, 0.55)
+    c.setFont("Helvetica", 7)
+    c.drawString(ml, 18 * mm,
+                 "The SHA-256 hash above is computed over the canonical "
+                 "proposal content at the moment of signing; any later change "
+                 "will produce a different hash.")
+
+    # Footer bar
+    c.setFillColorRGB(ar, ag, ab)
+    c.rect(0, 0, pw, 3 * mm, fill=1, stroke=0)
+    c.setFillColorRGB(0.55, 0.55, 0.55)
+    c.setFont("Helvetica", 7)
+    c.drawString(ml, 8 * mm, "Certificate of Completion")
+    c.drawRightString(pw - mr, 8 * mm, "Page 2")
 
 
 @router.post("/proposal-builder", dependencies=[Depends(require_internal_key)])
