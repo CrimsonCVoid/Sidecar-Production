@@ -90,7 +90,7 @@ def polygons_from_clicks(
         cols = corners_pix[:, 0]
         rows = corners_pix[:, 1]
         xs_m = cols * res_m
-        ys_m = rows * res_m
+        ys_m = -rows * res_m  # match planes.py: +y = north for north-up DSMs
         zs_m = _bilinear_sample(dsm, cols, rows)
 
         verts_3d = np.stack([xs_m, ys_m, zs_m], axis=1)
@@ -137,7 +137,7 @@ def extract_panel_polygons(
         cols = pix[:, 0]
         rows = pix[:, 1]
         xs_m = cols * res_m
-        ys_m = rows * res_m
+        ys_m = -rows * res_m  # match planes.py: +y = north for north-up DSMs
         zs_m = _bilinear_sample(dsm, cols, rows)
 
         verts_3d = np.stack([xs_m, ys_m, zs_m], axis=1)

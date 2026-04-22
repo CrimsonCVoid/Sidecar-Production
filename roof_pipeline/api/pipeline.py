@@ -745,9 +745,10 @@ async def get_cutsheet_data(
 
         # --- Build corner 3D polygon from user clicks, projected onto the
         # fitted plane so all vertices are exactly coplanar. ---
+        # y = -row*res_m to match planes.py (+y = north for north-up DSMs)
         poly_3d = np.array([
-            [float(cx) * res_m, float(cy) * res_m,
-             z_on_plane(float(cx) * res_m, float(cy) * res_m, plane)]
+            [float(cx) * res_m, -float(cy) * res_m,
+             z_on_plane(float(cx) * res_m, -float(cy) * res_m, plane)]
             for cx, cy in corners_pix
         ], dtype=np.float64)
 

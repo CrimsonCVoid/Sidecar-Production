@@ -56,7 +56,12 @@ def fit_all_panels(
 ) -> dict[int, Plane]:
     """Fit one plane per nonzero panel ID in the mask.
 
-    Pixel (row, col) -> world (x = col*res_m, y = row*res_m, z = dsm[row, col]).
+    Pixel (row, col) -> world (x = col*res_m, y = -row*res_m, z = dsm[row, col]).
+
+    The y-axis sign makes +y point north for a standard north-up DSM (where
+    row 0 is the northern edge): growing rows move south, so y = -row*res
+    puts north at +y. This is the right-handed convention every downstream
+    consumer (PDF drawings, azimuth_degrees, mesh viewers) already assumes.
     """
     if dsm.shape != mask.shape:
         raise ValueError(f"dsm {dsm.shape} != mask {mask.shape}")
@@ -78,7 +83,7 @@ def fit_all_panels(
             continue
         rows, cols, z = rows[good], cols[good], z[good]
         x = cols * res_m
-        y = rows * res_m
+        y = -rows * res_m
         pts = np.stack([x, y, z], axis=1).astype(np.float64)
         plane = fit_plane(pts)
         planes[pid] = plane
