@@ -356,10 +356,7 @@ def write_cutsheets_pdf(
             verts_3d = polygons[pid]
             R = rotation_to_horizontal(plane.normal)
             verts_rot = verts_3d @ R.T
-            # planes.py builds a LH world frame (+y = south in a north-up DSM).
-            # Flip y so cut sheets render north-up instead of mirrored.
-            verts_xy_m = verts_rot[:, :2].copy()
-            verts_xy_m[:, 1] *= -1
+            verts_xy_m = verts_rot[:, :2]
             verts_xy_ft = verts_xy_m * M_TO_FT
             area_m2 = polygon_area_2d(verts_xy_m)
             area_ft2 = area_m2 * SQM_TO_SQFT

@@ -345,11 +345,7 @@ def _panel_outline_2d(panel: dict) -> np.ndarray:
         return boundary[:, :2]
     R = rotation_to_horizontal(np.asarray(normal, dtype=float))
     rot = boundary @ R.T
-    # planes.py builds a LH world frame (+y = south in a north-up DSM).
-    # Flip y so shop drawings render north-up instead of mirrored.
-    xy = rot[:, :2].copy()
-    xy[:, 1] *= -1
-    return xy
+    return rot[:, :2]
 
 
 def sum_edges_by_type(roof: dict) -> dict[str, float]:

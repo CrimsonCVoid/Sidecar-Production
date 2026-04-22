@@ -78,10 +78,7 @@ def _flatten_panel_to_inches(
     and the panel area in square feet."""
     R = rotation_to_horizontal(plane.normal)
     rot = verts_3d @ R.T
-    # planes.py builds a LH world frame (+y = south in a north-up DSM).
-    # Flip v so the page reads north-up instead of mirrored.
-    uv_m = rot[:, :2].copy()
-    uv_m[:, 1] *= -1
+    uv_m = rot[:, :2]
     area_ft2 = polygon_area_2d(uv_m) * SQM_TO_SQFT
     # Center each panel on its own centroid so the drawing sits at (0, 0)
     centroid = uv_m.mean(axis=0)
