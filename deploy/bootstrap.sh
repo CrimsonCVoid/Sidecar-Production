@@ -81,6 +81,10 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
     useradd --system --create-home --home-dir "$APP_HOME" --shell /bin/bash "$APP_USER"
 fi
 install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$APP_HOME"
+# Pre-create dirs that the systemd unit lists in ReadWritePaths=. Systemd
+# refuses to start with status=226/NAMESPACE if any of those paths are
+# missing when the mount namespace is set up.
+install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$APP_DIR/data" "$APP_DIR/output"
 
 # -----------------------------------------------------------------------------
 # 3. Repo
