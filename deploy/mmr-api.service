@@ -1,0 +1,80 @@
+# =============================================================================
+# /etc/systemd/system/mmr-api.service — MMR FastAPI sidecar (uvicorn)
+# =============================================================================
+# Installed by deploy/bootstrap.sh. Manual install:
+#   sudo cp deploy/mmr-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mmr-api
+#
+# Operations:
+#   sudo systemctl status mmr-api       # current state
+#   sudo systemctl restart mmr-api      # apply code/.env changes
+#   sudo journalctl -u mmr-api -f       # tail logs
+#   sudo journalctl -u mmr-api -n 200   # last 200 lines
+# =============================================================================
+
+[Unit]
+Description=MMR FastAPI sidecar (roof_pipeline.api.main:app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=mmr
+Group=mmr
+WorkingDirectory=/opt/mmr-api/app
+
+# .env is read by pydantic-settings (Settings.model_config) at app start.
+# Permissions enforced to 0600 by bootstrap.sh.
+EnvironmentFile=/opt/mmr-api/app/.env
+
+# Bind ONLY to loopback — Caddy is the public entry point. Anything
+# reaching this port directly is either Caddy or a localhost attacker
+# (in which case the box is already compromised).
+ExecStart=/opt/mmr-api/venv/bin/uvicorn roof_pipeline.api.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 2 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1 \
+    --log-level info
+
+# NEVER STOP RUNNING:
+#   Restart=always       — restart on any exit (clean OR crash, including
+#                          OOM kills, signal terminations, segfaults)
+#   RestartSec=3         — wait 3s between restarts (avoid CPU spin if
+#                          startup itself is broken)
+#   StartLimitIntervalSec=0 — DISABLE the rate limit entirely. Default
+#                          behavior gives up after N restarts in M seconds;
+#                          we never want that. The service should keep
+#                          retrying forever even through repeated failures.
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+# Reload via systemd (NOT --reload — that's dev only and leaks file handles)
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mmr-api/app/output /opt/mmr-api/app/data /tmp
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+
+# Memory cap — labeler/cutsheet code allocates large numpy arrays.
+# Adjust if the droplet is bigger than 4GB.
+MemoryMax=3G
+MemoryHigh=2.5G
+
+# stdout/stderr → journald (use `journalctl -u mmr-api`)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mmr-api
+
+[Install]
+WantedBy=multi-user.target

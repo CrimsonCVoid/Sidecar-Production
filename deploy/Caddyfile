@@ -1,0 +1,75 @@
+# =============================================================================
+# /etc/caddy/Caddyfile — MMR sidecar reverse proxy
+# =============================================================================
+# Caddy auto-provisions a Let's Encrypt cert on first request to this host.
+# Requires:
+#   - DNS A-record: api.mymetalroofer.net → this droplet's public IP
+#   - Ports 80 + 443 open in UFW (bootstrap.sh handles this)
+#
+# To reload after editing this file:
+#   sudo systemctl reload caddy
+# =============================================================================
+
+api.mymetalroofer.net {
+    encode zstd gzip
+
+    # Vercel deployments + the prod apex are the only allowed Origins.
+    # Any browser request from elsewhere gets rejected at CORS preflight.
+    @cors_preflight {
+        method OPTIONS
+    }
+    handle @cors_preflight {
+        header {
+            Access-Control-Allow-Origin "{http.request.header.Origin}"
+            Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+            Access-Control-Allow-Headers "Authorization, Content-Type, X-Internal-API-Key"
+            Access-Control-Allow-Credentials "true"
+            Access-Control-Max-Age "86400"
+            Vary "Origin"
+        }
+        respond 204
+    }
+
+    # Reverse-proxy everything to the FastAPI sidecar on loopback. The
+    # sidecar binds to 127.0.0.1:8000 so it's not directly reachable
+    # from the internet — Caddy is the only entry point.
+    reverse_proxy 127.0.0.1:8000 {
+        # Pass the real client IP through so the sidecar's structured
+        # logging records actual remote addresses, not 127.0.0.1.
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Host {host}
+
+        # The labeler's straighten/cutsheet endpoints can take ~30s on
+        # large roofs. Default Caddy timeout is 30s; bump generously.
+        transport http {
+            response_header_timeout 5m
+            read_timeout 5m
+        }
+    }
+
+    # Echo CORS headers on real responses too (the sidecar already adds
+    # them via FastAPI CORSMiddleware, but Caddy can't see those — we
+    # set them here so cross-origin requests from Vercel work even if
+    # the sidecar's CORS_ORIGINS list drifts).
+    header {
+        Access-Control-Allow-Origin "{http.request.header.Origin}"
+        Access-Control-Allow-Credentials "true"
+        Vary "Origin"
+        # Security headers that don't break the sidecar
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Don't advertise the backend
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/api.mymetalroofer.net.log {
+            roll_size 50mb
+            roll_keep 7
+        }
+        format json
+    }
+}
