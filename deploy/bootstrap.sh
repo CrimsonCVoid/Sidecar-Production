@@ -42,8 +42,20 @@ die() { printf '\033[1;31m[fatal]\033[0m %s\n' "$*" >&2; exit 1; }
 log "Updating apt + installing system packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
+
+# Pick the right Python: prefer 3.12 (Ubuntu 24.04 stock), fall back to
+# 3.11 (Ubuntu 22.04 stock). Both work for roof_pipeline (requires 3.11+).
+if apt-cache show python3.12 >/dev/null 2>&1; then
+    PY_PKG="python3.12"
+elif apt-cache show python3.11 >/dev/null 2>&1; then
+    PY_PKG="python3.11"
+else
+    die "Neither python3.12 nor python3.11 is available in apt. Add deadsnakes PPA."
+fi
+log "Using $PY_PKG (Ubuntu $(. /etc/os-release && echo $VERSION_ID))"
+
 apt-get install -y --no-install-recommends \
-    python3.11 python3.11-venv python3.11-dev \
+    "$PY_PKG" "${PY_PKG}-venv" "${PY_PKG}-dev" \
     build-essential pkg-config \
     git curl ca-certificates gnupg \
     libgdal-dev gdal-bin \
@@ -87,7 +99,7 @@ fi
 # 4. Python venv + dependencies
 # -----------------------------------------------------------------------------
 log "Building Python venv + installing requirements"
-sudo -u "$APP_USER" python3.11 -m venv "$APP_HOME/venv"
+sudo -u "$APP_USER" "$PY_PKG" -m venv "$APP_HOME/venv"
 sudo -u "$APP_USER" "$APP_HOME/venv/bin/pip" install --quiet --upgrade pip wheel
 sudo -u "$APP_USER" "$APP_HOME/venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
 
