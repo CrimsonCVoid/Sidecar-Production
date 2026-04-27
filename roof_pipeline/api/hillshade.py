@@ -137,10 +137,12 @@ async def get_rgb(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
-    principal: Principal = Depends(require_principal),
+    # NOTE: auth removed because <img src=...> tags don't send Authorization
+    # headers. Access is gated by UUID-in-URL (122-bit unguessable). Tighten
+    # later via signed URLs or a Vercel proxy that injects X-Internal-API-Key.
 ):
     """Return the satellite RGB image as PNG for a training sample."""
-    verify_sample_access(principal, sample_id, supabase)
+    # verify_sample_access removed alongside require_principal — see note above.
     result = (
         supabase.table("training_samples")
         .select("rgb_storage_path")
@@ -193,10 +195,10 @@ async def get_heatmap(
     request: Request,
     settings: Settings = Depends(get_settings),
     supabase: Client = Depends(get_supabase),
-    principal: Principal = Depends(require_principal),
+    # NOTE: auth removed — see /rgb above for rationale (img tags can't auth).
 ):
     """Render and return a DSM elevation heatmap PNG (inferno colormap, RGBA)."""
-    verify_sample_access(principal, sample_id, supabase)
+    # verify_sample_access removed alongside require_principal — see note above.
     dsm_arr = _load_dsm(supabase, settings, sample_id)
     heatmap = _render_heatmap(dsm_arr)
     png_bytes = _to_png(heatmap)
