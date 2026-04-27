@@ -76,6 +76,12 @@ rm -rf "$APP_DIR"
 log "Cloning $REPO_URL ($REPO_BRANCH)"
 sudo -u "$APP_USER" git clone --branch "$REPO_BRANCH" --single-branch "$REPO_URL" "$APP_DIR"
 
+# Pre-create dirs that the systemd unit lists in ReadWritePaths=. Without
+# these the service exits with status=226/NAMESPACE before uvicorn even
+# starts. bootstrap.sh creates them on first install; redeploy wipes the
+# entire app dir, so we must recreate them after the clone.
+install -d -o "$APP_USER" -g "$APP_USER" -m 0755 "$APP_DIR/data" "$APP_DIR/output"
+
 # -----------------------------------------------------------------------------
 # 5. Restore .env
 # -----------------------------------------------------------------------------
