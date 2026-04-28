@@ -45,11 +45,15 @@ FONT = "Helvetica"
 FONT_BOLD = "Helvetica-Bold"
 FONT_ITALIC = "Helvetica-Oblique"
 
+# Trim/edge code map. "HIP" is the canonical code for what installers
+# also call a "hip cap" — same trim, one entry. STUCCO was added to
+# match the field crew's working list (transitions onto stucco walls
+# need their own piece).
 EDGE_CODE: dict[str, str] = {
     "EAVE": "ED", "RIDGE": "RC", "HIP": "HC", "VALLEY": "VF",
     "GABLE": "GR", "TRANSITION": "TF", "HIGH_SIDE": "HS",
     "FLYING_GABLE": "FG", "SIDEWALL": "SW", "ENDWALL": "EW",
-    "CHIMNEY_FLASHING": "CF",
+    "CHIMNEY_FLASHING": "CF", "STUCCO": "ST",
 }
 
 # Display order in the trim-takeoff block (skips zero-LF rows at render time)
@@ -57,8 +61,8 @@ TRIM_TAKEOFF_ORDER: list[tuple[str, str]] = [
     ("EAVE", "ED"), ("VALLEY", "VF"), ("TRANSITION", "TF"),
     ("HIP", "HC"), ("RIDGE", "RC"), ("GABLE", "GR"),
     ("SIDEWALL", "SW"), ("ENDWALL", "EW"),
-    ("CHIMNEY_FLASHING", "CF"), ("HIGH_SIDE", "HS"),
-    ("FLYING_GABLE", "FG"),
+    ("CHIMNEY_FLASHING", "CF"), ("STUCCO", "ST"),
+    ("HIGH_SIDE", "HS"), ("FLYING_GABLE", "FG"),
 ]
 
 DISCLAIMER = (
@@ -2069,30 +2073,38 @@ _CUT_TABLE_BOTTOM = 55        # space reserved for footer disclaimer
 
 def _collect_cut_groups(roof: dict) -> list[tuple[float, int]]:
     """Return [(length_ft, qty)] sorted longest first, identical lengths
-    collapsed into a single qty row."""
+    collapsed into a single qty row.
+
+    Bucketing is to the nearest inch (the cut-list display rounds to the
+    inch via feet_to_ft_in). Previously we required exact float equality
+    (< 1e-6 ft tolerance), but two sheets that both render as "14'-2\""
+    can differ by sub-inch floating-point drift between panels — the old
+    code split them into separate rows even though the field crew can't
+    tell them apart. Rounding to the inch matches what the page actually
+    displays so identical-looking lengths always show as one row with a
+    qty multiplier.
+    """
     panels = roof.get("roof_panels", [])
-    lengths = sorted(
-        (
-            float(s.get("length_ft", 0.0))
-            for p in panels for s in p.get("sheets", [])
-            if float(s.get("length_ft", 0.0)) > 0
-        ),
-        reverse=True,
-    )
-    grouped: list[tuple[float, int]] = []
-    if not lengths:
-        return grouped
-    cur_len = lengths[0]
-    cur_qty = 1
-    for L in lengths[1:]:
-        if abs(L - cur_len) < 1e-6:
-            cur_qty += 1
-        else:
-            grouped.append((cur_len, cur_qty))
-            cur_len = L
-            cur_qty = 1
-    grouped.append((cur_len, cur_qty))
-    return grouped
+    raw_lengths = [
+        float(s.get("length_ft", 0.0))
+        for p in panels
+        for s in p.get("sheets", [])
+        if float(s.get("length_ft", 0.0)) > 0
+    ]
+    if not raw_lengths:
+        return []
+    # Bucket key = total inches rounded to nearest inch. Aggregating into
+    # a dict keyed by rounded inches gives O(n) grouping that matches
+    # the displayed precision exactly.
+    from collections import Counter
+    counter: Counter[int] = Counter()
+    for L in raw_lengths:
+        counter[int(round(L * 12.0))] += 1
+    # Sort by inch-key descending → longest first.
+    return [
+        (key / 12.0, qty)
+        for key, qty in sorted(counter.items(), reverse=True)
+    ]
 
 
 def _cut_rows_per_column() -> int:
