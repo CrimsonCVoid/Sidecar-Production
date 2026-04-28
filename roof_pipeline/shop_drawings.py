@@ -523,7 +523,13 @@ def _draw_text_box(
     title: str, rows: list[tuple[str, str]],
     title_size: float = 9.0, row_size: float = 8.0,
 ) -> None:
-    """Boxed key-value list with a title bar at the top."""
+    """Boxed key-value list with a title bar at the top.
+
+    A row whose `value` is the empty string is rendered as a section
+    sub-header inside the same box: bold uppercase label + a thin
+    underline. Used to merge what used to be two separate stacked
+    boxes (e.g., TRIM TAKEOFF + STANDING SEAM TRIM ITEMS) into one.
+    """
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.75)
     c.rect(x, y, w, h, stroke=1, fill=0)
@@ -535,12 +541,26 @@ def _draw_text_box(
     c.drawString(x + 4, y + h - title_size - 2, title)
     # Rows
     c.setFillColor(colors.black)
-    c.setFont(FONT, row_size)
     line_h = row_size + 3
     cur_y = y + h - title_size - 6 - line_h
     for label, value in rows:
         if cur_y < y + 4:
             break
+        if value == "":
+            # Sub-header row: visually distinct from regular rows so the
+            # box reads as two grouped sections without needing a second
+            # _draw_text_box call.
+            cur_y -= 2  # extra breathing room above the divider
+            c.setFillColor(colors.HexColor("#444444"))
+            c.setFont(FONT_BOLD, row_size)
+            c.drawString(x + 4, cur_y, label.upper())
+            # Thin underline across the box width.
+            c.setStrokeColor(colors.HexColor("#cccccc"))
+            c.setLineWidth(0.4)
+            c.line(x + 4, cur_y - 2, x + w - 4, cur_y - 2)
+            c.setFillColor(colors.black)
+            cur_y -= line_h
+            continue
         c.setFont(FONT, row_size)
         c.drawString(x + 4, cur_y, label)
         c.setFont(FONT_BOLD, row_size)
@@ -1847,26 +1867,28 @@ def _render_page3(
     info_y = page_h - 70 - info_h
     _draw_text_box(c, col_x, info_y, col_w, info_h, "ESTIMATE INFO", info_rows)
 
-    # Skip trim types with zero linear-feet so the installer's takeoff
-    # only lists what's actually in play. (Earlier convention printed
-    # every trim type for completeness, but on simple roofs that meant
-    # mostly-zero rows that drowned out the real values.)
+    # TRIM TAKEOFF + STANDING SEAM TRIM ITEMS combined into one box.
+    # Per user request — easier to scan one block than two stacked
+    # boxes that always belonged together. Empty value (("...", ""))
+    # renders as a sub-header divider inside the box.
     trim_rows = [
         (label, feet_to_ft_in(trim_totals.get(code, 0.0)))
         for label, code in TRIM_TAKEOFF_ORDER
         if trim_totals.get(code, 0.0) > 0
     ]
-    trim_h = 24 + len(trim_rows) * 11
-    trim_y = info_y - 16 - trim_h
-    _draw_text_box(c, col_x, trim_y, col_w, trim_h, "TRIM TAKEOFF (LF)", trim_rows)
-
     ss_rows = [
         (name, feet_to_ft_in(formula(trim_totals)))
         for name, formula in trim_formulas.items()
     ]
-    ss_h = 24 + len(ss_rows) * 11
-    ss_y = trim_y - 16 - ss_h
-    _draw_text_box(c, col_x, ss_y, col_w, ss_h, "STANDING SEAM TRIM ITEMS", ss_rows)
+    combined_rows: list[tuple[str, str]] = list(trim_rows)
+    if ss_rows:
+        combined_rows.append(("Standing Seam Trim Items", ""))
+        combined_rows.extend(ss_rows)
+    # +18 below to absorb the sub-header row's extra spacing.
+    trim_h = 24 + len(combined_rows) * 11 + (18 if ss_rows else 0)
+    trim_y = info_y - 16 - trim_h
+    _draw_text_box(c, col_x, trim_y, col_w, trim_h, "TRIM TAKEOFF (LF)", combined_rows)
+    ss_y = trim_y  # downstream code that anchors off ss_y still works
 
     # COIL REQUIREMENTS: installer-facing "what coil do I need to order?"
     # block. Runs the coil_calc inverse solver on total_sheet_lf (primary +
@@ -2331,22 +2353,23 @@ def _render_page4(
     info_x = drw_x0 + drw_w + 24
     info_w = page_w - info_x - 40
 
-    # Skip zero-LF trim rows on this layout too — keeps the takeoff
-    # focused on what's actually present on the roof.
+    # TRIM TAKEOFF + STANDING SEAM TRIM ITEMS combined into one box
+    # (matches the page-3 layout). Empty value renders as a sub-header.
     trim_rows = [
         (label, feet_to_ft_in(trim_totals.get(code, 0.0)))
         for label, code in TRIM_TAKEOFF_ORDER
         if trim_totals.get(code, 0.0) > 0
     ]
-    _draw_text_box(c, info_x, page_h - 270, info_w, 200,
-                   "TRIM TAKEOFF (LF)", trim_rows)
-
     ss_rows = [
         (name, feet_to_ft_in(formula(trim_totals)))
         for name, formula in trim_formulas.items()
     ]
-    _draw_text_box(c, info_x, page_h - 400, info_w, 110,
-                   "STANDING SEAM TRIM ITEMS", ss_rows)
+    combined_rows: list[tuple[str, str]] = list(trim_rows)
+    if ss_rows:
+        combined_rows.append(("Standing Seam Trim Items", ""))
+        combined_rows.extend(ss_rows)
+    _draw_text_box(c, info_x, page_h - 400, info_w, 330,
+                   "TRIM TAKEOFF (LF)", combined_rows)
 
     # Trim-code reference legend
     legend_rows = [(code, label.replace("_", " ")) for label, code in EDGE_CODE.items()]
