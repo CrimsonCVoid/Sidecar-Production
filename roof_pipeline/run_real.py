@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -71,6 +72,7 @@ def run_pipeline(
     coverage_in: float = 24.0,
     profile: str = "SV",
     waste_pct: float = 11.0,
+    rgb_bytes: bytes | None = None,
 ) -> dict[str, Path]:
     """Execute the full roof pipeline on pre-loaded data arrays.
 
@@ -197,18 +199,38 @@ def run_pipeline(
         json_path, out_dir / "cutsheets.ts.pdf",
     )
 
-    log.info("=== shop drawings PDF (Integrity-Metals format) ===")
+    log.info("=== shop drawings PDF ===")
     project_meta = {
         "estimate_number": estimate_number or "UNKNOWN",
         "project_name": project_name,
         "project_address": project_address,
     }
+    # Decode RGB ortho if provided. Used by _render_page_3d_views to
+    # show the actual Google Solar imagery as the TOP cell and to
+    # color the per-panel meshes in the N/S/E/W cells with the average
+    # color sampled from the panel's footprint on the ortho.
+    rgb_image: np.ndarray | None = None
+    if rgb_bytes is not None:
+        try:
+            with rasterio.open(BytesIO(rgb_bytes)) as src:
+                # rasterio reads as (bands, h, w); transpose to (h, w, 3).
+                rgb_image = np.moveaxis(src.read(), 0, -1)
+                # Trim to 3 channels in case the GeoTIFF includes alpha.
+                if rgb_image.shape[-1] > 3:
+                    rgb_image = rgb_image[..., :3]
+        except Exception as e:
+            log.warning("Failed to decode RGB GeoTIFF (%s) — skipping textured 3D views", e)
+            rgb_image = None
+
     roof_dict = roof_dict_from_pipeline(
         raw_polygons, planes, project_meta,
         coverage_width_in=coverage_in,
         waste_pct=waste_pct,
         profile=profile,
     )
+    if rgb_image is not None:
+        roof_dict["rgb_image"] = rgb_image
+        roof_dict["rgb_res_m"] = res_m
     shop_pdf_path = generate_shop_drawings(
         roof_dict, out_dir / "shop_drawings.pdf",
     )

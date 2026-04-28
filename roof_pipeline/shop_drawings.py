@@ -2380,8 +2380,10 @@ def _render_page_3d_views(
         c.drawCentredString(page_w / 2.0, page_h / 2.0, "(no roof geometry)")
         return
 
+    rgb_image = roof.get("rgb_image")
+    rgb_res_m = roof.get("rgb_res_m")
     try:
-        png_path = _render_5views_png(panels)
+        png_path = _render_5views_png(panels, rgb_image=rgb_image, rgb_res_m=rgb_res_m)
     except Exception as e:  # matplotlib missing or mis-configured
         log.warning("page 3D: skipping render (%s)", e)
         c.setFont(FONT, 10)
@@ -2405,24 +2407,114 @@ def _render_page_3d_views(
             pass
 
 
-def _render_5views_png(panels: list[dict]) -> Path | None:
-    """Render top + 4 angled side views into one composite PNG."""
+def _world_xy_to_rgb_pix(
+    xy: np.ndarray, res_m: float, rgb_h: int, rgb_w: int,
+) -> np.ndarray:
+    """Convert (x, y) world-meters to (col, row) pixel indices in the RGB ortho.
+
+    The pipeline's world frame mirrors the DSM's pixel grid (see
+    boundaries.polygons_from_clicks):
+      x_m = col * res_m
+      y_m = -row * res_m   (because +y = north and rows count downward)
+
+    Inverse:
+      col = x_m / res_m
+      row = -y_m / res_m
+
+    Returns an Nx2 float array of (col, row), clamped to the image bounds.
+    """
+    cols = xy[:, 0] / res_m
+    rows = -xy[:, 1] / res_m
+    cols = np.clip(cols, 0, rgb_w - 1)
+    rows = np.clip(rows, 0, rgb_h - 1)
+    return np.stack([cols, rows], axis=1)
+
+
+def _sample_panel_color(
+    boundary_3d: np.ndarray,
+    rgb: np.ndarray,
+    res_m: float,
+) -> str:
+    """Mean RGB color of `rgb` inside the panel polygon's pixel footprint.
+
+    Returns a hex string. Falls back to mid-grey if the rasterized polygon
+    has zero pixels (panels smaller than 1 pixel after projection).
+    """
+    import cv2
+    rgb_h, rgb_w = rgb.shape[:2]
+    pix = _world_xy_to_rgb_pix(boundary_3d[:, :2], res_m, rgb_h, rgb_w)
+    pts = np.round(pix).astype(np.int32)
+    mask = np.zeros((rgb_h, rgb_w), dtype=np.uint8)
+    cv2.fillPoly(mask, [pts], 1)
+    inside = mask > 0
+    if not inside.any():
+        return "#888888"
+    region = rgb[inside]
+    # Normalize to 0..1 if uint8
+    if region.dtype == np.uint8:
+        mean = region.mean(axis=0) / 255.0
+    else:
+        mean = region.mean(axis=0)
+        if mean.max() > 1.001:
+            mean = mean / 255.0
+    r, g, b = (int(round(c * 255)) for c in mean[:3])
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _crop_rgb_to_roof(
+    rgb: np.ndarray, all_xy: np.ndarray, res_m: float, pad_m: float = 1.5,
+) -> np.ndarray:
+    """Crop the RGB ortho to the bounding box of the roof + padding."""
+    rgb_h, rgb_w = rgb.shape[:2]
+    pix = _world_xy_to_rgb_pix(all_xy, res_m, rgb_h, rgb_w)
+    pad_px = int(round(pad_m / res_m))
+    c0 = max(0, int(np.floor(pix[:, 0].min())) - pad_px)
+    c1 = min(rgb_w, int(np.ceil(pix[:, 0].max())) + pad_px)
+    r0 = max(0, int(np.floor(pix[:, 1].min())) - pad_px)
+    r1 = min(rgb_h, int(np.ceil(pix[:, 1].max())) + pad_px)
+    return rgb[r0:r1, c0:c1]
+
+
+def _render_5views_png(
+    panels: list[dict],
+    *,
+    rgb_image: np.ndarray | None = None,
+    rgb_res_m: float | None = None,
+) -> Path | None:
+    """Render TOP + 4 angled side views into one composite PNG.
+
+    When `rgb_image` (the Google Solar API ortho) is provided:
+      • TOP cell shows the actual aerial imagery cropped to the roof.
+      • N/S/E/W cells colour each panel with the average RGB sampled
+        from its footprint on the ortho — the mesh appears textured
+        with real Google imagery instead of palette-coloured.
+    When `rgb_image` is None (older samples without RGB), we fall back
+    to the previous palette-coloured 3D mesh.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
-    tris = []
+    tris: list[np.ndarray] = []
     all_xyz: list[np.ndarray] = []
     face_colors: list[str] = []
     edge_colors: list[str] = []
+    have_rgb = rgb_image is not None and rgb_res_m is not None
     for idx, panel in enumerate(panels):
         b = np.asarray(panel.get("boundary_3d", []), dtype=float)
         if b.shape[0] < 3:
             continue
         tris.append(b)
         all_xyz.append(b)
-        c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
+        if have_rgb:
+            try:
+                c_hex = _sample_panel_color(b, rgb_image, rgb_res_m)
+            except Exception as e:
+                log.warning("RGB sample failed for panel %d (%s) — falling back to palette", idx, e)
+                c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
+        else:
+            c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
         face_colors.append(c_hex)
         edge_colors.append("#222222")
     if not tris:
@@ -2433,19 +2525,32 @@ def _render_5views_png(panels: list[dict]) -> Path | None:
 
     fig = plt.figure(figsize=(16, 10), dpi=150)
     gs = fig.add_gridspec(2, 4, wspace=0.02, hspace=0.08)
-    ax_top   = fig.add_subplot(gs[0:2, 0:2], projection="3d")
-    ax_front = fig.add_subplot(gs[0, 2],     projection="3d")
-    ax_right = fig.add_subplot(gs[0, 3],     projection="3d")
-    ax_back  = fig.add_subplot(gs[1, 2],     projection="3d")
-    ax_left  = fig.add_subplot(gs[1, 3],     projection="3d")
 
-    # Side views get a modest downward tilt (20 deg) so the viewer sees
-    # BOTH the elevation and some roof surface.
+    # TOP cell: real Google Solar ortho when available, otherwise the
+    # mesh-rendered top-down view.
+    if have_rgb:
+        ax_top = fig.add_subplot(gs[0:2, 0:2])
+        ax_top.set_axis_off()
+        try:
+            cropped = _crop_rgb_to_roof(rgb_image, pts[:, :2], rgb_res_m)
+            ax_top.imshow(cropped)
+            ax_top.set_title("TOP (Google Solar imagery)",
+                             fontsize=11, fontweight="bold")
+        except Exception as e:
+            log.warning("TOP imshow failed (%s) — falling back to mesh", e)
+            # Replace with a 3D subplot
+            fig.delaxes(ax_top)
+            ax_top = fig.add_subplot(gs[0:2, 0:2], projection="3d")
+            have_rgb = False  # so populate() will fill it as a 3D view
+    else:
+        ax_top = fig.add_subplot(gs[0:2, 0:2], projection="3d")
+
+    ax_front = fig.add_subplot(gs[0, 2], projection="3d")
+    ax_right = fig.add_subplot(gs[0, 3], projection="3d")
+    ax_back  = fig.add_subplot(gs[1, 2], projection="3d")
+    ax_left  = fig.add_subplot(gs[1, 3], projection="3d")
+
     SIDE_TILT = 20.0
-    # Matplotlib 3D leaves a lot of whitespace around the plot; "zoom" is
-    # implemented by shrinking the axis limits around the roof's centroid.
-    # The TOP view uses the natural bounds (no zoom). The 4 side views zoom
-    # in so the roof fills the subplot.
     SIDE_ZOOM = 1.35
 
     cx = 0.5 * (mn[0] + mx[0])
@@ -2455,7 +2560,7 @@ def _render_5views_png(panels: list[dict]) -> Path | None:
     def populate(ax, elev, azim, title, zoom=1.0, exaggerate_z=1.0):
         for verts, fc, ec in zip(tris, face_colors, edge_colors):
             pc = Poly3DCollection(
-                [verts], facecolor=fc, edgecolor=ec, linewidth=0.6, alpha=0.95,
+                [verts], facecolor=fc, edgecolor=ec, linewidth=0.5, alpha=0.97,
             )
             ax.add_collection3d(pc)
         hx = 0.5 * (mx[0] - mn[0]) / zoom
@@ -2469,19 +2574,17 @@ def _render_5views_png(panels: list[dict]) -> Path | None:
         except Exception:
             pass
         try:
-            ax.set_proj_type("ortho")  # cleaner architectural look
+            ax.set_proj_type("ortho")
         except Exception:
             pass
         ax.set_axis_off()
         ax.view_init(elev=elev, azim=azim)
         ax.set_title(title, fontsize=11, fontweight="bold")
 
-    # Top view: orthographic down at natural bounds.
-    populate(ax_top,   elev=90.0, azim=-90.0, title="TOP", zoom=1.05)
-    # Side views: zoom in + exaggerate Z slightly so a shallow roof reads
-    # clearly as a sloped surface rather than a flat line. Labeled with
-    # cardinal directions (N/S/E/W) instead of FRONT/RIGHT/BACK/LEFT for
-    # cardinal-orientation reading on the cutsheet.
+    if not have_rgb:
+        populate(ax_top, elev=90.0, azim=-90.0, title="TOP", zoom=1.05)
+
+    # Side views: textured by RGB sample if available, otherwise palette.
     populate(ax_front, elev=SIDE_TILT, azim=-90.0, title="N",
              zoom=SIDE_ZOOM, exaggerate_z=1.6)
     populate(ax_right, elev=SIDE_TILT, azim=0.0,   title="S",

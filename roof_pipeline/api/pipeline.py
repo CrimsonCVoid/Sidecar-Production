@@ -416,7 +416,10 @@ async def generate_pdf(
     # 2. Get sample info
     sample_result = (
         supabase.table("training_samples")
-        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
+        .select(
+            "dsm_storage_path, rgb_storage_path, formatted_address, "
+            "source_address, meters_per_px"
+        )
         .eq("id", sample_id)
         .execute()
     )
@@ -427,10 +430,11 @@ async def generate_pdf(
     dsm_path = sample.get("dsm_storage_path")
     if not dsm_path:
         raise HTTPException(status_code=400, detail="Sample has no DSM")
+    rgb_path = sample.get("rgb_storage_path")  # optional — older samples may lack it
 
     address = sample.get("formatted_address") or sample.get("source_address") or sample_id
 
-    # 3. Download DSM
+    # 3. Download DSM (required) + RGB (optional, for textured 3D views)
     dsm_bytes = None
     for bucket in [settings.training_bucket, settings.storage_bucket]:
         try:
@@ -440,6 +444,20 @@ async def generate_pdf(
             continue
     if dsm_bytes is None:
         raise HTTPException(status_code=404, detail="Could not download DSM from storage")
+
+    rgb_bytes: bytes | None = None
+    if rgb_path:
+        for bucket in [settings.training_bucket, settings.storage_bucket]:
+            try:
+                rgb_bytes = supabase.storage.from_(bucket).download(rgb_path)
+                break
+            except Exception:
+                continue
+        if rgb_bytes is None:
+            log.warning(
+                "RGB at %s not downloadable — falling back to plain mesh views",
+                rgb_path,
+            )
 
     # 4. Write panels.json and DSM to temp dir, run pipeline
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -490,6 +508,7 @@ async def generate_pdf(
             project_name=address,
             project_address=address,
             estimate_number=sample_id[:8],
+            rgb_bytes=rgb_bytes,
         )
 
         # Find the cutsheets PDF
