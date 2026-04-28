@@ -93,7 +93,11 @@ def _meta(roof: dict) -> dict:
         "date":            roof.get("date", today),
         "drawn_by":        roof.get("drawn_by", "AUTO"),
         "checked_by":      roof.get("checked_by", "--"),
-        "fabricator_name": roof.get("fabricator_name", "INTEGRITY METALS"),
+        # Default to empty so no fabricator brand appears on the PDF
+        # unless the caller explicitly provides one. (Was "INTEGRITY
+        # METALS"; that brand should never have been baked into the
+        # default — it's a generic shop drawing tool.)
+        "fabricator_name": roof.get("fabricator_name", ""),
         "gauge":           roof.get("gauge", "24 GA"),
         "material":        roof.get("material", "GALVALUME"),
         "finish_color":    roof.get("finish_color", "MILL FINISH"),
@@ -620,8 +624,9 @@ def _render_page1(
     c.line(40, page_h - 60, page_w - 40, page_h - 60)
     c.setFont(FONT_BOLD, 18)
     c.drawString(40, page_h - 44, "PANEL LAYOUT PLAN")
-    c.setFont(FONT, 9)
-    c.drawString(40, page_h - 56, meta["fabricator_name"])
+    if meta["fabricator_name"]:
+        c.setFont(FONT, 9)
+        c.drawString(40, page_h - 56, meta["fabricator_name"])
     c.setFont(FONT, 9)
     c.drawRightString(page_w - 40, page_h - 44,
                       f"Estimate {meta['estimate_number']}")
@@ -748,10 +753,25 @@ def _render_page1(
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.9)
     c.rect(tb_x, tb_y, tb_w, tb_h, stroke=1, fill=0)
-    # Title rows (project name, address)
-    c.setFont(FONT_BOLD, 13)
+    # Title rows (project name, address). Both auto-shrink to fit the
+    # title block — long addresses (full street + city + state + zip)
+    # were overflowing into the right edge of the box at the original
+    # 9pt size.
+    inner_w = tb_w - 16  # 8pt left padding + 8pt right padding
+
+    def _fit(text: str, font: str, max_size: int, min_size: int) -> int:
+        """Return the largest size (max_size .. min_size) that fits inner_w."""
+        for sz in range(int(max_size), int(min_size) - 1, -1):
+            if c.stringWidth(text or "", font, sz) <= inner_w:
+                return sz
+        return int(min_size)
+
+    name_size = _fit(meta["project_name"], FONT_BOLD, 13, 9)
+    c.setFont(FONT_BOLD, name_size)
     c.drawString(tb_x + 8, tb_y + tb_h - 20, meta["project_name"])
-    c.setFont(FONT, 9)
+
+    addr_size = _fit(meta["project_address"], FONT, 9, 6)
+    c.setFont(FONT, addr_size)
     c.drawString(tb_x + 8, tb_y + tb_h - 34, meta["project_address"])
     # Divider above the data grid
     c.line(tb_x, tb_y + tb_h - 44, tb_x + tb_w, tb_y + tb_h - 44)
@@ -772,9 +792,10 @@ def _render_page1(
         c.setFillColor(colors.black)
         c.setFont(FONT_BOLD, 11)
         c.drawCentredString(cx, grid_bot + 6, val)
-    # Bottom row: fabricator + estimate number
-    c.setFont(FONT_BOLD, 9)
-    c.drawString(tb_x + 8, tb_y + 12, meta["fabricator_name"])
+    # Bottom row: fabricator (optional) + estimate number
+    if meta["fabricator_name"]:
+        c.setFont(FONT_BOLD, 9)
+        c.drawString(tb_x + 8, tb_y + 12, meta["fabricator_name"])
     c.setFont(FONT, 9)
     c.drawRightString(tb_x + tb_w - 8, tb_y + 12, f"Estimate {meta['estimate_number']}")
     # Optional CHECKED BY tucked below the divider on the right
