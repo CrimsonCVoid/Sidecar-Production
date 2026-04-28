@@ -462,6 +462,141 @@ def _draw_text_box(
 
 
 # ---------------------------------------------------------------------------
+# Wireframe pages — pure outline view + dimensioned outline view
+# ---------------------------------------------------------------------------
+
+def _render_page_wireframe(
+    c: pdfcanvas.Canvas, roof: dict,
+    with_dimensions: bool,
+    page_num: int, total_pages: int,
+) -> None:
+    """Pure roof wireframe (no fills, no panel IDs, no sheet strips).
+
+    `with_dimensions=False`: bare polygon outlines — clean reference geometry.
+    `with_dimensions=True`: same outlines + each edge labeled with its
+    true 3D length in ft-in.
+    """
+    page_w, page_h = ANSI_B_PORTRAIT
+    c.setPageSize((page_w, page_h))
+
+    M_TO_FT = 3.280839895
+    meta = _meta(roof)
+    panels = roof.get("roof_panels", [])
+
+    title = "ROOF WIREFRAME — DIMENSIONED" if with_dimensions else "ROOF WIREFRAME"
+    c.setFont(FONT_BOLD, 14)
+    c.drawString(40, page_h - 36, title)
+    c.setFont(FONT, 9)
+    c.drawString(40, page_h - 50,
+                 f"{meta['project_name']}   |   {meta['project_address']}")
+    c.drawRightString(page_w - 40, page_h - 36, f"Estimate {meta['estimate_number']}")
+    c.drawRightString(page_w - 40, page_h - 50,
+                      f"REV {meta['revision']}  |  {meta['date']}  |  "
+                      f"DRAWN: {meta['drawn_by']}  |  Page {page_num} of {total_pages}")
+
+    c.setFont(FONT_ITALIC, 8.5)
+    c.setFillColor(colors.HexColor("#666666"))
+    sub = (
+        "Edge dimensions are true 3-D lengths (slope-corrected). Field-verify."
+        if with_dimensions
+        else "Pure plan-view outline. No fills, no IDs — quick reference geometry."
+    )
+    c.drawString(40, page_h - 64, sub)
+    c.setFillColor(colors.black)
+
+    if not panels:
+        c.setFont(FONT, 10)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.drawCentredString(page_w / 2, page_h / 2, "No panels labeled yet.")
+        c.setFillColor(colors.black)
+        return
+
+    # Drawing area
+    drw_x0, drw_y0 = 40.0, 80.0
+    drw_w = page_w - 80
+    drw_h = page_h - 130
+
+    # Combined plan-view bounds (boundary_3d xy components, in meters)
+    panel_boundaries: list[np.ndarray] = []
+    for p in panels:
+        b = np.asarray(p.get("boundary_3d", []), dtype=float)
+        if b.ndim == 2 and b.shape[0] >= 3:
+            panel_boundaries.append(b)
+    if not panel_boundaries:
+        return
+    all_xy = np.vstack([b[:, :2] for b in panel_boundaries])
+    scale, offset = fit_to_box(all_xy, drw_w, drw_h, margin=0.10)
+    offset = offset + np.array([drw_x0, drw_y0])
+
+    # Pre-compute page-space outlines so we can draw every polygon first,
+    # then run a single collision-aware label pass across the whole page.
+    outlines_pg: list[np.ndarray] = []
+    for boundary in panel_boundaries:
+        outline_xy = boundary[:, :2]
+        outline_pg = np.array([_world_to_page(p, scale, offset) for p in outline_xy])
+        outlines_pg.append(outline_pg)
+        _draw_polygon(c, outline_pg, line_width=1.4, stroke=colors.black)
+
+    if not with_dimensions:
+        # Footer + early exit for the clean (undimensioned) wireframe.
+        c.setFont(FONT_ITALIC, 6.5)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.drawCentredString(page_w / 2, 30, DISCLAIMER)
+        c.setFillColor(colors.black)
+        return
+
+    # Build one _EdgeLabelSpec per edge across every panel so the shared
+    # placement engine can avoid cross-panel collisions (the old loop
+    # placed labels panel-by-panel with no global view, so adjacent
+    # panels' labels would clip each other).
+    specs: list[_EdgeLabelSpec] = []
+    all_roof_edges_pg: list[tuple[np.ndarray, np.ndarray]] = []
+    for boundary, outline_pg in zip(panel_boundaries, outlines_pg):
+        centroid_pg = outline_pg.mean(axis=0)
+        n = len(outline_pg)
+        all_roof_edges_pg.extend([
+            (outline_pg[i], outline_pg[(i + 1) % n]) for i in range(n)
+        ])
+        for i in range(n):
+            p1_pg = outline_pg[i]
+            p2_pg = outline_pg[(i + 1) % n]
+            p1_3d = boundary[i]
+            p2_3d = boundary[(i + 1) % n]
+            dx, dy, dz = p2_3d - p1_3d
+            edge_len_ft = math.hypot(dx, dy, dz) * M_TO_FT
+            if edge_len_ft <= 0.01:
+                continue
+            specs.append(_EdgeLabelSpec(
+                p1_pg, p2_pg, centroid_pg,
+                feet_to_ft_in(edge_len_ft),
+                base_size=8.0,
+            ))
+
+    margin_bounds = (drw_x0 - 8.0, drw_y0 - 8.0,
+                     drw_x0 + drw_w + 8.0, drw_y0 + drw_h + 8.0)
+    # Wireframe: no markers (this is a clean dimension page), leaders
+    # ENABLED so colliding labels route around obstacles via a 90° elbow
+    # instead of clipping the outlines. Do NOT drop unresolved labels
+    # on a dimension page — the whole point is every edge gets a number.
+    placements = _place_edge_labels(
+        specs, obstacle_aabbs=[],
+        roof_edges=all_roof_edges_pg, margin_bounds=margin_bounds,
+        min_font_size=5.5,
+        allow_markers=False,
+        drop_if_unresolved=False,
+        allow_leaders=True,
+    )
+    for p in placements:
+        _draw_placement(c, p)
+
+    # Footer disclaimer
+    c.setFont(FONT_ITALIC, 6.5)
+    c.setFillColor(colors.HexColor("#888888"))
+    c.drawCentredString(page_w / 2, 30, DISCLAIMER)
+    c.setFillColor(colors.black)
+
+
+# ---------------------------------------------------------------------------
 # Page 1: Panel Layout Plan (ANSI B portrait)
 # ---------------------------------------------------------------------------
 
@@ -581,7 +716,13 @@ def _render_page1(
         # readable on every color in the palette (S4 yellow-on-white was
         # invisible in v2).
         cx, cy = outline_pg.mean(axis=0)
-        sid = panels[idx].get("panel_id", str(idx + 1))
+        # Use the labeler's `id` first (frontend source of truth), then
+        # legacy `panel_id`, then positional fallback. Keeps the PDF in
+        # sync with what the user sees in the labeler and cut-sheet tab.
+        raw_id = panels[idx].get("id")
+        if raw_id is None:
+            raw_id = panels[idx].get("panel_id", idx + 1)
+        sid = str(raw_id)
         c.saveState()
         c.setFillColor(colors.white)
         c.setStrokeColor(panel_color[idx])
@@ -592,49 +733,8 @@ def _render_page1(
         c.drawCentredString(float(cx), float(cy) - 3.0, sid.replace("panel_", "P"))
         c.restoreState()
 
-    # ---- Boxed panels legend in the upper-right corner of the drawing area
-    # (drawn after the panels/outlines so it always wins visually)
-    legend_w = 260.0
-    n_sec = len(panels)
-    legend_h = 28.0 + n_sec * 16.0 + 20.0  # +20 for the TOTAL row
-    legend_x = draw_x0 + draw_w - legend_w
-    legend_y = draw_y0 + draw_h - legend_h
-    c.saveState()
-    c.setFillColor(colors.white)
-    c.setStrokeColor(colors.black)
-    c.setLineWidth(0.6)
-    c.rect(legend_x, legend_y, legend_w, legend_h, stroke=1, fill=1)
-    c.setFillColor(colors.HexColor("#222222"))
-    c.rect(legend_x, legend_y + legend_h - 18, legend_w, 18, stroke=0, fill=1)
-    c.setFillColor(colors.white)
-    c.setFont(FONT_BOLD, 10)
-    c.drawString(legend_x + 8, legend_y + legend_h - 13, "PANELS")
-    c.setFillColor(colors.black)
-    c.setFont(FONT, 9)
-    grand_sheets = 0
-    grand_lf = 0.0
-    for idx, panel in enumerate(panels):
-        color = colors.HexColor(PANEL_PALETTE[idx % len(PANEL_PALETTE)])
-        ly = legend_y + legend_h - 18 - 14 - idx * 16
-        c.setFillColor(color)
-        c.rect(legend_x + 8, ly, 18, 11, stroke=0, fill=1)
-        c.setFillColor(colors.black)
-        n_sheets = len(panel.get("sheets", []))
-        total_lf = sum(float(sh.get("length_ft", 0.0)) for sh in panel.get("sheets", []))
-        grand_sheets += n_sheets
-        grand_lf += total_lf
-        c.drawString(legend_x + 32, ly + 1,
-                     f"{panel.get('panel_id', '?')}   "
-                     f"{n_sheets} sheets   {feet_to_ft_in(total_lf)}")
-    # Grand-total row (highlighted) -- the fabricator wants "total pieces" at a glance
-    total_y = legend_y + 8
-    c.setFillColor(colors.HexColor("#f2f2f2"))
-    c.rect(legend_x, total_y - 2, legend_w, 18, stroke=0, fill=1)
-    c.setFillColor(colors.black)
-    c.setFont(FONT_BOLD, 9)
-    c.drawString(legend_x + 8, total_y + 3,
-                 f"TOTAL   {grand_sheets} sheets   {feet_to_ft_in(grand_lf)}")
-    c.restoreState()
+    # ---- (PANELS legend intentionally omitted — per-panel sheet totals live
+    #      on the cut-summary pages, not on the plan sheet)
 
     # ---- North arrow in the upper-left corner of the drawing area
     _draw_north_arrow(c, draw_x0 + 40, draw_y0 + draw_h - 50, size=64)
@@ -768,17 +868,13 @@ def _draw_sheet_length_label(
     sheet_id: int | None = None,
     run_axis_pg: np.ndarray | None = None,
 ) -> None:
-    """Draw panel ID + length along the panel's slope (run) direction.
+    """Draw the sheet length along the panel's slope (run) direction.
 
-    Policy:
-      - The length label is rotated along the RUN axis (eave->ridge) so
-        adjacent panels read consistently and the visual length differences
-        between panels are obvious.
-      - The P# is always drawn, even for tiny corner-clipped panels. When
-        the panel is too small to fit the ID inside, we draw it OUTSIDE the
-        polygon with a thin leader line back to the centroid -- otherwise
-        the installer loses sight of panels that were visibly trimmed.
+    The S# label is intentionally omitted from the layout drawing — sheet
+    IDs live on the dedicated cut-list page. This keeps the plan clean
+    and shows only the dimension the installer cares about on-roof.
     """
+    del sheet_id  # intentionally unused — IDs live on the cut list page only
     if poly_pg.shape[0] < 3:
         return
 
@@ -799,87 +895,97 @@ def _draw_sheet_length_label(
     elif angle < -90:
         angle += 180
 
-    # Dimensions projected onto the (run, perp) basis in page space
     rad = math.radians(angle)
     run_vec = np.array([math.cos(rad), math.sin(rad)])
     perp_vec = np.array([-math.sin(rad), math.cos(rad)])
     run_proj = poly_pg @ run_vec
     perp_proj = poly_pg @ perp_vec
-    run_extent = float(run_proj.max() - run_proj.min())  # panel length on page
-    perp_extent = float(perp_proj.max() - perp_proj.min())  # panel width on page
+    run_extent = float(run_proj.max() - run_proj.min())
+    perp_extent = float(perp_proj.max() - perp_proj.min())
 
     length_text = feet_to_ft_in(length_ft)
-    fits_inside = perp_extent >= 10.0 and run_extent >= 40.0
+    fits_inside = perp_extent >= 8.0 and run_extent >= 30.0
 
     if fits_inside:
-        # Two lines stacked across the panel's width (P# above, length below).
-        text_size = max(4.5, min(8.0, perp_extent * 0.40))
-        line_offset = max(text_size * 0.60, 3.0)
-        id_pos = centroid + perp_vec * line_offset
-        len_pos = centroid - perp_vec * line_offset
-        if sheet_id is not None:
-            _draw_centered_text(c, f"S{sheet_id}",
-                                float(id_pos[0]), float(id_pos[1]),
-                                rotate=angle, size=text_size * 0.9,
-                                font=FONT_BOLD, color=colors.HexColor("#222222"))
+        text_size = max(5.0, min(8.5, perp_extent * 0.45))
         _draw_centered_text(c, length_text,
-                            float(len_pos[0]), float(len_pos[1]),
+                            float(centroid[0]), float(centroid[1]),
                             rotate=angle, size=text_size,
                             color=colors.HexColor("#222222"))
         return
 
-    # Panel is too small to hold both labels. Always show the P# with a
-    # leader to keep the count contiguous; length only if it fits.
-    if run_extent >= 20.0 and perp_extent >= 6.0:
-        # Just enough room for the length inside, rotated along run axis
+    # Tight panel — only place a length label if there's room; otherwise
+    # the cut-list page covers it.
+    if run_extent >= 18.0 and perp_extent >= 5.0:
         _draw_centered_text(c, length_text,
                             float(centroid[0]), float(centroid[1]),
                             rotate=angle, size=max(4.0, min(6.5, perp_extent * 0.5)),
                             color=colors.HexColor("#222222"))
-    if sheet_id is not None:
-        # Pull the ID OUT of the polygon along the perp axis + leader line.
-        # Alternate sides per panel to reduce pile-up on narrow strips: we
-        # can't easily know adjacency here, so just pick the side with more
-        # whitespace by flipping away from the polygon centroid-of-page.
-        leader = perp_vec * (perp_extent / 2 + 8.0)
-        out_pos = centroid + leader
-        c.saveState()
-        c.setStrokeColor(colors.HexColor("#888888"))
-        c.setLineWidth(0.3)
-        c.line(float(centroid[0]), float(centroid[1]),
-               float(out_pos[0]), float(out_pos[1]))
-        c.restoreState()
-        _draw_centered_text(c, f"S{sheet_id}",
-                            float(out_pos[0]) + float(perp_vec[0]) * 4,
-                            float(out_pos[1]) + float(perp_vec[1]) * 4,
-                            rotate=angle, size=5.5,
-                            font=FONT_BOLD, color=colors.HexColor("#222222"))
 
 
 def _draw_north_arrow(c: pdfcanvas.Canvas, x: float, y: float, size: float = 28.0) -> None:
-    """Small N arrow inside a circle. Assumes world +Y = north so the arrow
-    on the page points UP (positive page Y)."""
+    """Draftsman-style compass rose: two-tone N-pointing needle, cardinal
+    ticks at E/S/W, bold "N" label at the top inside the ring. Assumes
+    world +Y = north so the needle on the page points UP."""
+    r = size / 2.0
     c.saveState()
+
+    # Outer ring
     c.setStrokeColor(colors.black)
     c.setFillColor(colors.white)
-    c.setLineWidth(0.75)
-    c.circle(x, y, size / 2.0, stroke=1, fill=1)
-    # Arrow shaft (bottom -> top inside circle)
+    c.setLineWidth(0.8)
+    c.circle(x, y, r, stroke=1, fill=1)
+
+    # Subtle inner ring for depth
+    c.setStrokeColor(colors.HexColor("#bfbfbf"))
+    c.setLineWidth(0.3)
+    c.circle(x, y, r * 0.90, stroke=1, fill=0)
+
+    # Cardinal ticks at E / S / W (N is consumed by the letter + arrow tip)
     c.setStrokeColor(colors.black)
-    c.setLineWidth(1.4)
-    c.line(x, y - size * 0.30, x, y + size * 0.32)
-    # Arrowhead
-    head = size * 0.10
-    p = c.beginPath()
-    p.moveTo(x, y + size * 0.40)
-    p.lineTo(x - head, y + size * 0.20)
-    p.lineTo(x + head, y + size * 0.20)
-    p.close()
+    c.setLineWidth(0.6)
+    tick = r * 0.15
+    c.line(x + r, y, x + r - tick, y)           # E
+    c.line(x, y - r, x, y - r + tick)           # S
+    c.line(x - r, y, x - r + tick, y)           # W
+
+    # Bold "N" label at the top, inside the ring
     c.setFillColor(colors.black)
-    c.drawPath(p, stroke=0, fill=1)
-    # "N" label below the arrow
-    c.setFont(FONT_BOLD, 8)
-    c.drawCentredString(x, y - size * 0.50, "N")
+    font_size = size * 0.26
+    c.setFont(FONT_BOLD, font_size)
+    c.drawCentredString(x, y + r - font_size * 1.05, "N")
+
+    # Two-tone draftsman needle: tip just under the "N", split vertically
+    # into a solid-black west half and a white-filled/outlined east half.
+    tip_y = y + r - font_size * 1.25
+    base_y = y - r * 0.72
+    half_w = r * 0.19
+
+    left = c.beginPath()
+    left.moveTo(x, tip_y)
+    left.lineTo(x - half_w, base_y)
+    left.lineTo(x, base_y)
+    left.close()
+    c.setFillColor(colors.black)
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(0.4)
+    c.drawPath(left, stroke=1, fill=1)
+
+    right = c.beginPath()
+    right.moveTo(x, tip_y)
+    right.lineTo(x + half_w, base_y)
+    right.lineTo(x, base_y)
+    right.close()
+    c.setFillColor(colors.white)
+    c.setStrokeColor(colors.black)
+    c.setLineWidth(0.4)
+    c.drawPath(right, stroke=1, fill=1)
+
+    # Small center hub pin
+    c.setFillColor(colors.black)
+    c.setStrokeColor(colors.black)
+    c.circle(x, y - r * 0.03, r * 0.05, stroke=0, fill=1)
+
     c.restoreState()
 
 
@@ -983,17 +1089,45 @@ class _LabelPlacement:
     """Resolved placement for one label."""
     def __init__(self, spec: _EdgeLabelSpec):
         self.spec = spec
-        self.mode = "inline"    # inline | leader | marker
+        self.mode = "inline"    # inline | elbow | marker | dropped
         self.anchor = spec.mid + spec.normal * 22.0
         self.angle = spec.angle
         self.size = spec.base_size
         self.text = spec.text
-        self.leader_from = spec.mid  # edge midpoint
+        self.leader_from = spec.mid  # edge midpoint (tail of leader)
+        self.leader_bend: np.ndarray | None = None  # 90-deg bend point for "elbow"
         self.marker_num: int | None = None
 
     def bbox(self) -> tuple[float, float, float, float]:
-        return _text_bbox_aabb(self.text, self.size, self.anchor,
-                               0.0 if self.mode == "leader" else self.angle)
+        # elbow labels are drawn horizontal; so is the old (removed) leader
+        # mode. Anything else uses the edge angle.
+        if self.mode in ("elbow", "leader"):
+            return _text_bbox_aabb(self.text, self.size, self.anchor, 0.0)
+        return _text_bbox_aabb(self.text, self.size, self.anchor, self.angle)
+
+
+def _segments_cross(
+    a1: np.ndarray, a2: np.ndarray,
+    b1: np.ndarray, b2: np.ndarray,
+    eps: float = 1e-6,
+) -> bool:
+    """Proper intersection test for two line segments.
+
+    Returns True only when the segments cross at an interior point;
+    touching endpoints or collinear overlap are treated as non-crossing
+    (the label engine uses this to detect leaders punching through
+    polygon outlines, and a leader that terminates on an outline is fine).
+    """
+    def ccw(p: np.ndarray, q: np.ndarray, r: np.ndarray) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    d1 = ccw(b1, b2, a1)
+    d2 = ccw(b1, b2, a2)
+    d3 = ccw(a1, a2, b1)
+    d4 = ccw(a1, a2, b2)
+    return (
+        ((d1 > eps and d2 < -eps) or (d1 < -eps and d2 > eps))
+        and ((d3 > eps and d4 < -eps) or (d3 < -eps and d4 > eps))
+    )
 
 
 def _place_edge_labels(
@@ -1002,122 +1136,187 @@ def _place_edge_labels(
     roof_edges: list[tuple[np.ndarray, np.ndarray]],
     margin_bounds: tuple[float, float, float, float],
     min_font_size: float = 5.0,
+    *,
+    allow_markers: bool = True,
+    allow_leaders: bool = False,
+    drop_if_unresolved: bool = False,
 ) -> list[_LabelPlacement]:
-    """Place labels using a tiered fallback:
-       1. inline at default outward offset
-       2. shift along edge (t = 0.3 ... 0.7) if overlap
-       3. shrink down to min_font_size if overlap
-       4. push further outward along the normal
-       5. leader line to nearest page margin
-       6. numbered marker on the edge + legend
+    """Greedy edge-label placement with hard polygon-boundary respect.
+
+    For each label we enumerate candidates from cheapest (inline, short
+    outward offset, full size) to most expensive (long elbow leader on
+    the opposite normal, shrunk font) and pick the first one that:
+
+      * fits inside ``margin_bounds`` (stays on the page),
+      * doesn't overlap any already-placed label or obstacle AABB,
+      * doesn't sit on a roof edge,
+      * (for elbows) neither leader segment crosses any roof edge.
+
+    Specs are processed longest-edge first — long edges are easier to
+    place, so grabbing their best spots first leaves the residual clear
+    space for the short edges that are harder to fit.
+
+    Fallbacks after candidate exhaustion:
+      * ``allow_markers=True`` → demote to numbered marker + legend.
+      * ``allow_markers=False`` and ``drop_if_unresolved=True`` → ``mode='dropped'``
+        (label disappears; avoids visual mush).
+      * Otherwise → revert to default inline, accept overlap.
     """
     placements = [_LabelPlacement(s) for s in specs]
+    mx0, my0, mx1, my1 = margin_bounds
 
-    def collides(p: _LabelPlacement, idx: int) -> bool:
-        b = p.bbox()
-        for j, q in enumerate(placements):
-            if j == idx:
-                continue
-            if _aabbs_overlap(b, q.bbox()):
-                return True
-        for ob in obstacle_aabbs:
-            if _aabbs_overlap(b, ob):
-                return True
-        # also check that the label doesn't sit on a roof edge
-        for a, c in roof_edges:
-            if _segment_intersects_aabb(a, c, b):
+    def _within_margin(bbox: tuple[float, float, float, float]) -> bool:
+        return bbox[0] >= mx0 and bbox[1] >= my0 and bbox[2] <= mx1 and bbox[3] <= my1
+
+    def _leader_hits_edge(
+        a: np.ndarray, b: np.ndarray,
+        skip_a: np.ndarray | None = None, skip_b: np.ndarray | None = None,
+    ) -> bool:
+        for ea, eb in roof_edges:
+            # Skip the label's own edge: a leader that starts on an edge
+            # naturally "touches" it and would false-positive otherwise.
+            if skip_a is not None and skip_b is not None:
+                if np.allclose(ea, skip_a) and np.allclose(eb, skip_b):
+                    continue
+                if np.allclose(ea, skip_b) and np.allclose(eb, skip_a):
+                    continue
+            if _segments_cross(a, b, ea, eb):
                 return True
         return False
 
-    # ---- Tier 1-4: inline adjustments ----
-    OUTWARD_STEPS = [22.0, 28.0, 34.0, 42.0]
-    SHIFT_Ts = [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]  # along-edge midpoint slide
-    SIZE_STEPS_FRAC = [1.0, 0.9, 0.8, 0.72, 0.66]
+    def _collides_existing(
+        bbox: tuple[float, float, float, float], placed_bboxes: list[tuple],
+    ) -> bool:
+        for ob in obstacle_aabbs:
+            if _aabbs_overlap(bbox, ob):
+                return True
+        for pb in placed_bboxes:
+            if _aabbs_overlap(bbox, pb):
+                return True
+        for ea, eb in roof_edges:
+            if _segment_intersects_aabb(ea, eb, bbox):
+                return True
+        return False
 
-    for idx, p in enumerate(placements):
-        # Very short edges: force numbered-marker tier upfront
-        if p.spec.length < max(16.0, 2.2 * p.spec.base_size):
-            continue  # leave for later marker tier
+    # Candidate generator for one spec. Yields (mode, anchor, angle, size,
+    # leader_from, leader_bend). Order matters — earlier candidates are
+    # tried first, so they should be the "nice" ones.
+    OUT_STEPS = (18.0, 22.0, 28.0, 36.0)
+    SHIFT_TS = (0.5, 0.4, 0.6, 0.3, 0.7)
+    SIZE_FRACS = (1.0, 0.9, 0.82, 0.72)
+    ELBOW_OUTS = (18.0, 26.0, 36.0)
+    ELBOW_RUNS = (28.0, 44.0, 62.0, 84.0)
 
-        resolved = False
-        for out in OUTWARD_STEPS:
-            if resolved:
-                break
-            for t in SHIFT_Ts:
-                if resolved:
-                    break
-                for size_frac in SIZE_STEPS_FRAC:
-                    new_mid = p.spec.edge_a + t * (p.spec.edge_b - p.spec.edge_a)
-                    p.anchor = new_mid + p.spec.normal * out
-                    p.size = p.spec.base_size * size_frac
-                    if p.size < min_font_size:
-                        continue
-                    if not collides(p, idx):
-                        resolved = True
-                        p.leader_from = new_mid
-                        break
+    def _candidates_for(spec: _EdgeLabelSpec):
+        along = spec.edge_b - spec.edge_a
+        along_len = float(np.linalg.norm(along))
+        along_u = along / (along_len or 1.0)
+        base = spec.base_size
 
-    # ---- Tier 5: leader line to nearest margin for still-colliding labels ----
-    x0, y0, x1, y1 = margin_bounds
-    MARGIN_PAD = 12.0
-    for idx, p in enumerate(placements):
-        if p.mode != "inline" or not collides(p, idx):
-            continue
-        # Already resolved? Check post-adjustments:
-        if not collides(p, idx):
-            continue
-        # Route to nearest margin along the outward normal. Preference order:
-        # the margin side the outward normal points toward first.
-        outward = p.spec.normal
-        candidates: list[tuple[np.ndarray, float]] = []
-        if outward[0] > 0:
-            candidates.append((np.array([x1 - MARGIN_PAD, p.spec.mid[1]]), x1 - p.spec.mid[0]))
-            candidates.append((np.array([x0 + MARGIN_PAD, p.spec.mid[1]]), p.spec.mid[0] - x0))
-        else:
-            candidates.append((np.array([x0 + MARGIN_PAD, p.spec.mid[1]]), p.spec.mid[0] - x0))
-            candidates.append((np.array([x1 - MARGIN_PAD, p.spec.mid[1]]), x1 - p.spec.mid[0]))
-        if outward[1] > 0:
-            candidates.append((np.array([p.spec.mid[0], y1 - MARGIN_PAD]), y1 - p.spec.mid[1]))
-            candidates.append((np.array([p.spec.mid[0], y0 + MARGIN_PAD]), p.spec.mid[1] - y0))
-        else:
-            candidates.append((np.array([p.spec.mid[0], y0 + MARGIN_PAD]), p.spec.mid[1] - y0))
-            candidates.append((np.array([p.spec.mid[0], y1 - MARGIN_PAD]), y1 - p.spec.mid[1]))
-        # Pick the shortest leader that actually resolves
-        candidates.sort(key=lambda c: c[1])
-        trial_mode = p.mode
-        trial_angle = p.angle
-        p.mode = "leader"
-        p.angle = 0.0
-        p.size = max(p.spec.base_size * 0.85, min_font_size)
-        resolved = False
-        for cand, _dist in candidates:
-            # try small perturbations along the margin to avoid other leaders
-            for shift in (0, 22, -22, 44, -44, 66, -66):
-                if abs(cand[0] - x0 - MARGIN_PAD) < 1 or abs(cand[0] - (x1 - MARGIN_PAD)) < 1:
-                    trial = cand + np.array([0.0, float(shift)])
-                else:
-                    trial = cand + np.array([float(shift), 0.0])
-                if not (x0 <= trial[0] <= x1 and y0 <= trial[1] <= y1):
+        # The spec's outward normal points away from the panel centroid.
+        # Try it first, then the opposite side as a fallback for panels
+        # surrounded on the "outward" side (inner hips, L-roofs).
+        normals = (spec.normal, -spec.normal)
+        is_short = along_len < max(16.0, 2.2 * base)
+
+        if not is_short:
+            # Tier 1-4: inline placement, preferring the primary normal.
+            for normal in normals:
+                for out in OUT_STEPS:
+                    for t in SHIFT_TS:
+                        for frac in SIZE_FRACS:
+                            size = base * frac
+                            if size < min_font_size:
+                                continue
+                            mid = spec.edge_a + t * along
+                            anchor = mid + normal * out
+                            yield (
+                                "inline", anchor, spec.angle, size,
+                                mid, None,
+                            )
+
+        # Tier 5 (elbow): outward then along-edge bend. Horizontal text.
+        if allow_leaders:
+            for normal in normals:
+                along_step = np.array([-normal[1], normal[0]])
+                for out in ELBOW_OUTS:
+                    bend = spec.mid + normal * out
+                    for sign in (+1, -1):
+                        for run in ELBOW_RUNS:
+                            anchor = bend + along_step * (sign * run)
+                            size = max(base * 0.92, min_font_size)
+                            yield (
+                                "elbow", anchor, 0.0, size,
+                                spec.mid, bend,
+                            )
+
+    # Sort indices by edge length descending so long (easy) edges claim
+    # their best spots first, leaving residual clear space for shorts.
+    order = sorted(
+        range(len(placements)),
+        key=lambda i: -placements[i].spec.length,
+    )
+
+    placed_bboxes: list[tuple[float, float, float, float]] = []
+    resolved_flags = [False] * len(placements)
+
+    for idx in order:
+        p = placements[idx]
+        for mode, anchor, angle, size, leader_from, leader_bend in _candidates_for(p.spec):
+            # Build the bbox for this candidate without mutating p.
+            if mode == "elbow":
+                bbox = _text_bbox_aabb(p.text, size, anchor, 0.0)
+            else:
+                bbox = _text_bbox_aabb(p.text, size, anchor, angle)
+
+            if not _within_margin(bbox):
+                continue
+            if _collides_existing(bbox, placed_bboxes):
+                continue
+
+            # Elbow leaders must stay in clear space — no polygon crossings.
+            if mode == "elbow":
+                if _leader_hits_edge(leader_from, leader_bend,
+                                     skip_a=p.spec.edge_a, skip_b=p.spec.edge_b):
                     continue
-                p.anchor = trial
-                if not collides(p, idx):
-                    resolved = True
-                    break
-            if resolved:
-                break
-        if not resolved:
-            # Roll back to inline; will be handled by marker tier below
-            p.mode = trial_mode
-            p.angle = trial_angle
+                if _leader_hits_edge(leader_bend, anchor,
+                                     skip_a=p.spec.edge_a, skip_b=p.spec.edge_b):
+                    continue
 
-    # ---- Tier 6: numbered markers for unresolved + very-short edges ----
+            # Commit.
+            p.mode = mode
+            p.anchor = anchor
+            p.angle = angle
+            p.size = size
+            p.leader_from = leader_from
+            p.leader_bend = leader_bend
+            placed_bboxes.append(bbox)
+            resolved_flags[idx] = True
+            break
+
+        if not resolved_flags[idx]:
+            # Keep the default inline position as the best guess. The
+            # fallback tiers below may demote/drop, but we leave something
+            # reasonable in anchor/size in case neither fires.
+            p.anchor = p.spec.mid + p.spec.normal * 22.0
+            p.size = p.spec.base_size
+            p.leader_from = p.spec.mid
+            p.leader_bend = None
+            p.mode = "inline"
+
+    del margin_bounds  # no longer needed
+
+    # ---- Unresolved-label fallbacks ----
+    if not allow_markers:
+        if drop_if_unresolved:
+            for idx, p in enumerate(placements):
+                if not resolved_flags[idx]:
+                    p.mode = "dropped"
+        return placements
+
     next_marker = 1
     for idx, p in enumerate(placements):
-        needs_marker = (
-            p.spec.length < max(16.0, 2.2 * p.spec.base_size)
-            or (p.mode == "inline" and collides(p, idx))
-        )
-        if not needs_marker:
+        if resolved_flags[idx]:
             continue
         p.mode = "marker"
         p.marker_num = next_marker
@@ -1131,7 +1330,10 @@ def _place_edge_labels(
 
 
 def _draw_placement(c: pdfcanvas.Canvas, p: _LabelPlacement) -> None:
-    """Draw the resolved label (inline text / leader-line text / marker)."""
+    """Draw the resolved label (inline text / elbow leader / marker)."""
+    if p.mode == "dropped":
+        return
+
     if p.mode == "marker":
         # Small circled number sitting ON the edge midpoint
         c.saveState()
@@ -1145,12 +1347,47 @@ def _draw_placement(c: pdfcanvas.Canvas, p: _LabelPlacement) -> None:
         c.restoreState()
         return
 
-    if p.mode == "leader":
+    if p.mode == "elbow":
+        # Two-segment leader: edge_mid -> bend -> anchor. Bend is placed
+        # outward along the edge normal so the leader reads like a
+        # dimension line.
+        bend = p.leader_bend if p.leader_bend is not None else p.leader_from
+        # Halo rectangle behind the text so the leader doesn't visually
+        # punch into the label.
+        size = float(p.size)
+        tw = pdfmetrics.stringWidth(p.text, FONT, size)
+        halo_pad = 2.0
+        halo_x = float(p.anchor[0]) - tw / 2.0 - halo_pad
+        halo_y = float(p.anchor[1]) - size * 0.35
+        halo_w = tw + 2 * halo_pad
+        halo_h = size + halo_pad
+
         c.saveState()
         c.setStrokeColor(colors.HexColor("#888888"))
-        c.setLineWidth(0.4)
+        c.setLineWidth(0.5)
         c.line(float(p.leader_from[0]), float(p.leader_from[1]),
-               float(p.anchor[0]), float(p.anchor[1]))
+               float(bend[0]), float(bend[1]))
+        # Stop the second segment at the halo edge so it doesn't slide
+        # under the text.
+        dx = float(p.anchor[0]) - float(bend[0])
+        dy = float(p.anchor[1]) - float(bend[1])
+        dist = math.hypot(dx, dy)
+        if dist > 1e-6:
+            stop_frac = max(0.0, 1.0 - (tw / 2.0 + halo_pad + 1.0) / dist)
+            end_x = float(bend[0]) + dx * stop_frac
+            end_y = float(bend[1]) + dy * stop_frac
+        else:
+            end_x, end_y = float(p.anchor[0]), float(p.anchor[1])
+        c.line(float(bend[0]), float(bend[1]), end_x, end_y)
+        # Small square tick where the leader meets the edge.
+        c.setFillColor(colors.HexColor("#888888"))
+        c.rect(float(p.leader_from[0]) - 1.0,
+               float(p.leader_from[1]) - 1.0,
+               2.0, 2.0, stroke=0, fill=1)
+        # Halo + text.
+        c.setFillColor(colors.white)
+        c.setStrokeColor(colors.white)
+        c.rect(halo_x, halo_y, halo_w, halo_h, stroke=0, fill=1)
         c.restoreState()
         _draw_centered_text(c, p.text,
                             float(p.anchor[0]), float(p.anchor[1]),
@@ -1277,8 +1514,9 @@ def _render_page2(
     bottom_y = 60
     cols = 2
     rows_per_page = 3
-    slot_w = (page_w - 2 * margin_x - 24) / cols
-    gap_y = 16
+    gap_x = 32
+    gap_y = 26
+    slot_w = (page_w - 2 * margin_x - gap_x) / cols
     slot_h = (top_y - bottom_y - (rows_per_page - 1) * gap_y) / rows_per_page
 
     # Use the ABSOLUTE panel index (not chunk-local) for the section header
@@ -1289,7 +1527,7 @@ def _render_page2(
         absolute_idx = start + local_idx
         col = local_idx % cols
         row = local_idx // cols
-        slot_x0 = margin_x + col * (slot_w + 24)
+        slot_x0 = margin_x + col * (slot_w + gap_x)
         slot_y0 = top_y - (row + 1) * slot_h - row * gap_y
         slot_placements = _draw_panel_edge_diagram(
             c, panel, slot_x0, slot_y0, slot_w, slot_h,
@@ -1474,11 +1712,14 @@ def _render_page3(
     info_y = page_h - 70 - info_h
     _draw_text_box(c, col_x, info_y, col_w, info_h, "ESTIMATE INFO", info_rows)
 
-    # Industry convention: print every trim type, even zero-LF, so the
-    # installer knows nothing was missed.
+    # Skip trim types with zero linear-feet so the installer's takeoff
+    # only lists what's actually in play. (Earlier convention printed
+    # every trim type for completeness, but on simple roofs that meant
+    # mostly-zero rows that drowned out the real values.)
     trim_rows = [
         (label, feet_to_ft_in(trim_totals.get(code, 0.0)))
         for label, code in TRIM_TAKEOFF_ORDER
+        if trim_totals.get(code, 0.0) > 0
     ]
     trim_h = 24 + len(trim_rows) * 11
     trim_y = info_y - 16 - trim_h
@@ -1523,77 +1764,142 @@ def _draw_sheet_grid(
     c: pdfcanvas.Canvas, panels: list[dict],
     x0: float, y0: float, w: float, h: float,
 ) -> None:
-    """Grid of per-panel cut-list columns, wrapping to new rows every 6 panels.
+    """Per-panel cut-list columns laid out in a flow grid.
 
-    Each panel gets a slot (title + stack of proportional horizontal bars).
-    When a panel has more sheets than fit vertically in its slot, sheets
-    flow into sub-columns within that slot.
+    Key differences from the prior version:
+      * Bar widths use a SINGLE ft->pt scale across every panel, so visually
+        a 30' sheet on panel A is drawn twice as wide as a 15' sheet on
+        panel B. Previously each panel had its own scale, which made short
+        panels look identical to long ones.
+      * Each panel's column is sized close to that panel's own longest
+        sheet (plus a fixed label-overflow margin), so short panels take
+        less page space and long panels can stretch out.
+      * Wider inter-column padding.
+      * If a bar's length label doesn't fit inside the rectangle, it's
+        drawn to the immediate right of the bar instead of overflowing.
     """
     if not panels:
         return
-    n_panels = len(panels)
-    cols = min(SHEETS_PANELS_PER_ROW, n_panels)
-    n_rows = math.ceil(n_panels / SHEETS_PANELS_PER_ROW)
-    col_gap = 16.0
-    row_gap_panels = 20.0
-    panel_w = (w - (cols - 1) * col_gap) / cols
+
+    # --- Global scale --------------------------------------------------------
+    # Find the single longest sheet across every panel; map it to ~32% of
+    # the grid width so multiple panels fit comfortably side-by-side while
+    # still being visually to-scale.
+    panel_max_lens: list[float] = []
+    for p in panels:
+        s = p.get("sheets", [])
+        panel_max_lens.append(
+            max((float(sh.get("length_ft", 0.0)) for sh in s), default=0.0)
+        )
+    overall_max = max(panel_max_lens) if panel_max_lens else 0.0
+    if overall_max <= 0:
+        return
+
+    # Bars never exceed MAX_BAR_W; longest sheet in the whole job scales
+    # to that width, and every other bar is drawn in the same ft->pt units.
+    MAX_BAR_W = min(w * 0.32, 220.0)
+    pt_per_ft = MAX_BAR_W / overall_max
+
+    # --- Per-panel column widths --------------------------------------------
+    # A panel's bar-region width = its max length * pt_per_ft (floored so
+    # tiny panels still show a readable label). Plus LABEL_OVERFLOW_PAD on
+    # the right to hold labels that spill outside the bar.
+    BAR_REGION_MIN = 42.0
+    LABEL_OVERFLOW_PAD = 40.0
+    col_gap = 22.0
+    row_gap_panels = 26.0
+
+    def _bar_region_w(max_len: float) -> float:
+        return max(BAR_REGION_MIN, max_len * pt_per_ft)
+
+    col_widths = [_bar_region_w(m) + LABEL_OVERFLOW_PAD for m in panel_max_lens]
+
+    # --- Flow layout: wrap columns into rows when they exceed grid width ----
+    rows: list[list[int]] = []
+    current: list[int] = []
+    used = 0.0
+    for i, cw in enumerate(col_widths):
+        need = cw + (col_gap if current else 0.0)
+        if current and used + need > w:
+            rows.append(current)
+            current = [i]
+            used = cw
+        else:
+            current.append(i)
+            used += need
+    if current:
+        rows.append(current)
+
+    n_rows = max(1, len(rows))
     panel_h = (h - (n_rows - 1) * row_gap_panels) / n_rows
 
     bar_h = 10.0
-    bar_gap = 2.0
-    heading_h = 14.0
+    bar_gap = 3.0
+    heading_h = 16.0
     sheets_per_subcol = max(4, int((panel_h - heading_h) / (bar_h + bar_gap)))
 
-    for p_idx, panel in enumerate(panels):
-        col = p_idx % SHEETS_PANELS_PER_ROW
-        row = p_idx // SHEETS_PANELS_PER_ROW
-        panel_x = x0 + col * (panel_w + col_gap)
-        # First row is at the top: its baseline y = y0 + h - panel_h
-        panel_y = y0 + h - (row + 1) * panel_h - row * row_gap_panels
+    label_font_size = 6.5
 
-        # Panel heading
-        c.setFont(FONT_BOLD, 9)
-        c.setFillColor(colors.black)
-        title = f"{panel.get('panel_id', 'panel')}  ({len(panel.get('sheets', []))} sheets)"
-        c.drawString(panel_x, panel_y + panel_h - 10, title)
+    for row_idx, row in enumerate(rows):
+        panel_y = y0 + h - (row_idx + 1) * panel_h - row_idx * row_gap_panels
+        panel_x = x0
+        for i in row:
+            panel = panels[i]
+            cw = col_widths[i]
+            bar_region = _bar_region_w(panel_max_lens[i])
 
-        # Shop-floor convention: cut list shows sheets longest -> shortest so
-        # the fabricator can batch similar lengths. The original sheet_id is
-        # preserved on each bar so the installer can trace a bar back to its
-        # physical position on the Page-1 layout plan.
-        sheets = sorted(
-            panel.get("sheets", []),
-            key=lambda sh: float(sh.get("length_ft", 0.0)),
-            reverse=True,
-        )
-        if not sheets:
-            continue
-        max_len = float(sheets[0].get("length_ft", 0.0))
-        if max_len <= 0:
-            continue
-
-        n_subcols = max(1, math.ceil(len(sheets) / sheets_per_subcol))
-        subcol_gap = 8.0
-        subcol_w = (panel_w - (n_subcols - 1) * subcol_gap) / n_subcols
-        bar_max = subcol_w
-        ft_per_pt = max_len / bar_max
-
-        for i, sheet in enumerate(sheets):
-            sub = i // sheets_per_subcol
-            local_row = i % sheets_per_subcol
-            sub_x = panel_x + sub * (subcol_w + subcol_gap)
-            bar_y = (panel_y + panel_h - heading_h
-                     - (local_row + 1) * (bar_h + bar_gap))
-            length_ft = float(sheet.get("length_ft", 0.0))
-            bar_w = length_ft / ft_per_pt
-            c.setStrokeColor(colors.black)
-            c.setFillColor(colors.HexColor("#e6f0fa"))
-            c.setLineWidth(0.5)
-            c.rect(sub_x, bar_y, bar_w, bar_h, stroke=1, fill=1)
-            label = feet_to_ft_in(length_ft)
-            c.setFont(FONT, 6)
+            # Heading
+            c.setFont(FONT_BOLD, 9)
             c.setFillColor(colors.black)
-            c.drawString(sub_x + 3, bar_y + 3, label)
+            title = f"{panel.get('panel_id', 'panel')}  ({len(panel.get('sheets', []))} sheets)"
+            c.drawString(panel_x, panel_y + panel_h - 10, title)
+
+            # Shop-floor convention: longest -> shortest for batching.
+            sheets = sorted(
+                panel.get("sheets", []),
+                key=lambda sh: float(sh.get("length_ft", 0.0)),
+                reverse=True,
+            )
+            if not sheets:
+                panel_x += cw + col_gap
+                continue
+
+            # Subcolumns fold long panels into narrower stacks.
+            n_subcols = max(1, math.ceil(len(sheets) / sheets_per_subcol))
+            subcol_gap = 10.0
+            subcol_w = (bar_region - (n_subcols - 1) * subcol_gap) / n_subcols
+
+            for k, sheet in enumerate(sheets):
+                sub = k // sheets_per_subcol
+                local_row = k % sheets_per_subcol
+                sub_x = panel_x + sub * (subcol_w + subcol_gap)
+                bar_y = (
+                    panel_y + panel_h - heading_h
+                    - (local_row + 1) * (bar_h + bar_gap)
+                )
+                length_ft = float(sheet.get("length_ft", 0.0))
+                # Bars use the GLOBAL scale, clipped to the subcol width
+                # (a single panel's own max defines its subcol, so a bar
+                # that equals the panel max exactly fills the subcol).
+                bar_w = min(length_ft * pt_per_ft, subcol_w)
+
+                c.setStrokeColor(colors.black)
+                c.setFillColor(colors.HexColor("#e6f0fa"))
+                c.setLineWidth(0.5)
+                c.rect(sub_x, bar_y, bar_w, bar_h, stroke=1, fill=1)
+
+                label = feet_to_ft_in(length_ft)
+                c.setFont(FONT, label_font_size)
+                label_w = pdfmetrics.stringWidth(label, FONT, label_font_size)
+                c.setFillColor(colors.black)
+                # If the label fits inside the bar, draw it inside; otherwise
+                # drop it immediately to the right of the bar.
+                if label_w + 4.0 <= bar_w:
+                    c.drawString(sub_x + 3.0, bar_y + 2.5, label)
+                else:
+                    c.drawString(sub_x + bar_w + 3.0, bar_y + 2.5, label)
+
+            panel_x += cw + col_gap
 
 
 def _draw_wrapped(
@@ -1621,6 +1927,177 @@ def _draw_wrapped(
 # ---------------------------------------------------------------------------
 # Page 4: Combined Edge Detail (ANSI B landscape)
 # ---------------------------------------------------------------------------
+
+# --- Layout constants for the consolidated cut summary page (CMG-style) ---
+_CUT_N_COLS = 5
+_CUT_COL_GAP = 8
+_CUT_ROW_H = 18.0
+_CUT_TABLE_TOP_OFFSET = 100   # space reserved for header + summary band
+_CUT_TABLE_BOTTOM = 55        # space reserved for footer disclaimer
+
+
+def _collect_cut_groups(roof: dict) -> list[tuple[float, int]]:
+    """Return [(length_ft, qty)] sorted longest first, identical lengths
+    collapsed into a single qty row."""
+    panels = roof.get("roof_panels", [])
+    lengths = sorted(
+        (
+            float(s.get("length_ft", 0.0))
+            for p in panels for s in p.get("sheets", [])
+            if float(s.get("length_ft", 0.0)) > 0
+        ),
+        reverse=True,
+    )
+    grouped: list[tuple[float, int]] = []
+    if not lengths:
+        return grouped
+    cur_len = lengths[0]
+    cur_qty = 1
+    for L in lengths[1:]:
+        if abs(L - cur_len) < 1e-6:
+            cur_qty += 1
+        else:
+            grouped.append((cur_len, cur_qty))
+            cur_len = L
+            cur_qty = 1
+    grouped.append((cur_len, cur_qty))
+    return grouped
+
+
+def _cut_rows_per_column() -> int:
+    _, page_h = ANSI_B_LANDSCAPE
+    table_h = page_h - _CUT_TABLE_TOP_OFFSET - _CUT_TABLE_BOTTOM - 18
+    return max(1, int(table_h // _CUT_ROW_H))
+
+
+def _num_cut_summary_pages(roof: dict) -> int:
+    groups = _collect_cut_groups(roof)
+    if not groups:
+        return 1  # still emit one page so layout is predictable
+    capacity = _cut_rows_per_column() * _CUT_N_COLS
+    return max(1, math.ceil(len(groups) / capacity))
+
+
+def _render_page_cut_summary(
+    c: pdfcanvas.Canvas, roof: dict,
+    chunk_index: int, n_chunks: int,
+    page_num: int, total_pages: int,
+) -> None:
+    """Render one page of the consolidated cut list. Pages are zero-indexed
+    via ``chunk_index``; ``n_chunks`` is the total number of cut-summary
+    pages so this page can show "Cut list 2 / 3" in the header.
+    """
+    page_w, page_h = ANSI_B_LANDSCAPE
+    c.setPageSize((page_w, page_h))
+
+    meta = _meta(roof)
+    grouped = _collect_cut_groups(roof)
+    all_lengths = [L for L, qty in grouped for _ in range(qty)]
+    rows_per_col = _cut_rows_per_column()
+    capacity = rows_per_col * _CUT_N_COLS
+
+    # Slice to this page's chunk
+    start = chunk_index * capacity
+    end = start + capacity
+    page_groups = grouped[start:end]
+    page_first_index = start  # for the running 1-based row number
+
+    # ---- Header
+    title_suffix = f"  ({chunk_index + 1} of {n_chunks})" if n_chunks > 1 else ""
+    c.setFont(FONT_BOLD, 16)
+    c.drawString(40, page_h - 36, f"TOTAL CUT LIST  —  longest to shortest{title_suffix}")
+    c.setFont(FONT, 10)
+    c.drawString(40, page_h - 52,
+                 f"{meta['project_name']}   |   {meta['project_address']}")
+    c.drawRightString(page_w - 40, page_h - 36, f"Estimate {meta['estimate_number']}")
+    c.drawRightString(page_w - 40, page_h - 52,
+                      f"REV {meta['revision']}  |  {meta['date']}  |  "
+                      f"DRAWN: {meta['drawn_by']}  |  Page {page_num} of {total_pages}")
+
+    c.setFont(FONT_ITALIC, 9)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.drawString(40, page_h - 66,
+                 "Flat list of every sheet (no panel grouping). Use for cutting "
+                 "/ pulling stock; cross-reference the per-panel page for placement.")
+    c.setFillColor(colors.black)
+
+    # ---- Summary band (always shows project totals, regardless of chunk)
+    total_lf = sum(all_lengths)
+    longest = all_lengths[0] if all_lengths else 0.0
+    shortest = all_lengths[-1] if all_lengths else 0.0
+    avg = (total_lf / len(all_lengths)) if all_lengths else 0.0
+
+    band_y = page_h - 78
+    band_h = 32
+    c.setStrokeColor(colors.HexColor("#cccccc"))
+    c.setLineWidth(0.4)
+    c.setFillColor(colors.HexColor("#f4f4f4"))
+    c.rect(40, band_y - band_h, page_w - 80, band_h, stroke=1, fill=1)
+    c.setFillColor(colors.black)
+
+    summary_cells = [
+        ("TOTAL SHEETS", f"{len(all_lengths)}"),
+        ("TOTAL LF",     feet_to_ft_in(total_lf)),
+        ("LONGEST",      feet_to_ft_in(longest)),
+        ("SHORTEST",     feet_to_ft_in(shortest)),
+        ("AVERAGE",      feet_to_ft_in(avg)),
+    ]
+    cell_w = (page_w - 80) / len(summary_cells)
+    for i, (label, value) in enumerate(summary_cells):
+        cx = 40 + i * cell_w + cell_w / 2
+        c.setFont(FONT, 8)
+        c.setFillColor(colors.HexColor("#666666"))
+        c.drawCentredString(cx, band_y - 11, label)
+        c.setFont(FONT_BOLD, 14)
+        c.setFillColor(colors.black)
+        c.drawCentredString(cx, band_y - 25, value)
+
+    # ---- Cut list table
+    table_top = band_y - band_h - 16
+    table_w = page_w - 80
+    col_w = (table_w - _CUT_COL_GAP * (_CUT_N_COLS - 1)) / _CUT_N_COLS
+
+    # Column headers
+    for ci in range(_CUT_N_COLS):
+        x0 = 40 + ci * (col_w + _CUT_COL_GAP)
+        c.setFont(FONT_BOLD, 10)
+        c.setFillColor(colors.HexColor("#444444"))
+        c.drawString(x0, table_top - 12, "#")
+        c.drawString(x0 + 30, table_top - 12, "LENGTH")
+        c.drawRightString(x0 + col_w, table_top - 12, "QTY")
+        c.setStrokeColor(colors.HexColor("#bbbbbb"))
+        c.setLineWidth(0.5)
+        c.line(x0, table_top - 16, x0 + col_w, table_top - 16)
+    c.setFillColor(colors.black)
+
+    # Lay rows column-major (top→bottom of column 1, then column 2, …)
+    for idx, (L, qty) in enumerate(page_groups):
+        ci = idx // rows_per_col
+        ri = idx % rows_per_col
+        x0 = 40 + ci * (col_w + _CUT_COL_GAP)
+        y = table_top - 28 - ri * _CUT_ROW_H
+        if ri % 2 == 1:
+            c.setFillColor(colors.HexColor("#fafafa"))
+            c.rect(x0 - 2, y - 4, col_w + 4, _CUT_ROW_H, stroke=0, fill=1)
+            c.setFillColor(colors.black)
+        running_idx = page_first_index + idx + 1
+        c.setFont(FONT, 10)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.drawString(x0, y, f"{running_idx:>3}")
+        c.setFillColor(colors.black)
+        c.setFont(FONT_BOLD, 12)
+        c.drawString(x0 + 30, y, feet_to_ft_in(L))
+        c.setFont(FONT, 11)
+        c.setFillColor(colors.HexColor("#444444") if qty == 1 else colors.HexColor("#0a5"))
+        c.drawRightString(x0 + col_w, y, f"× {qty}")
+        c.setFillColor(colors.black)
+
+    # Footer disclaimer
+    c.setFont(FONT_ITALIC, 7)
+    c.setFillColor(colors.HexColor("#888888"))
+    c.drawCentredString(page_w / 2, 28, DISCLAIMER)
+    c.setFillColor(colors.black)
+
 
 def _render_page4(
     c: pdfcanvas.Canvas, roof: dict,
@@ -1690,10 +2167,18 @@ def _render_page4(
 
     margin_bounds = (drw_x0 - 6.0, drw_y0 - 6.0,
                      drw_x0 + drw_w + 6.0, drw_y0 + drw_h + 6.0)
+    # Combined view: no marker circles, but DO allow elbow leaders so a
+    # label that can't fit inline gets a clean dimension-style pullout
+    # instead of overlapping the polygon outline. Anything the engine
+    # can't resolve silently drops — the per-panel EDGE / TRIM pages
+    # have the full catalog.
     placements = _place_edge_labels(
         specs, obstacle_aabbs=obstacle_aabbs,
         roof_edges=all_roof_edges_pg, margin_bounds=margin_bounds,
-        min_font_size=5.0,
+        min_font_size=5.5,
+        allow_markers=False,
+        allow_leaders=True,
+        drop_if_unresolved=True,
     )
     for p in placements:
         _draw_placement(c, p)
@@ -1703,9 +2188,12 @@ def _render_page4(
     info_x = drw_x0 + drw_w + 24
     info_w = page_w - info_x - 40
 
+    # Skip zero-LF trim rows on this layout too — keeps the takeoff
+    # focused on what's actually present on the roof.
     trim_rows = [
         (label, feet_to_ft_in(trim_totals.get(code, 0.0)))
         for label, code in TRIM_TAKEOFF_ORDER
+        if trim_totals.get(code, 0.0) > 0
     ]
     _draw_text_box(c, info_x, page_h - 270, info_w, 200,
                    "TRIM TAKEOFF (LF)", trim_rows)
@@ -1722,18 +2210,9 @@ def _render_page4(
     _draw_text_box(c, info_x, 80, info_w, 200,
                    "TRIM CODES", legend_rows)
 
-    # Edge-marker legend: only rendered when the placement engine had to
-    # demote labels to numbered markers. Sits above the TRIM CODES box.
-    markers = sorted(
-        (p for p in placements if p.mode == "marker"),
-        key=lambda p: p.marker_num or 0,
-    )
-    if markers:
-        marker_rows = [(f"({p.marker_num})", p.spec.text) for p in markers]
-        marker_h = min(200, 24 + len(marker_rows) * 10)
-        _draw_text_box(c, info_x, 290, info_w, marker_h,
-                       "EDGE MARKERS", marker_rows,
-                       title_size=9.0, row_size=7.0)
+    # (Edge-marker legend intentionally omitted — the combined view runs
+    # the placement engine with allow_markers=False so there are no
+    # numbered markers to legend.)
 
 
 # ---------------------------------------------------------------------------
@@ -1871,14 +2350,16 @@ def _render_5views_png(panels: list[dict]) -> Path | None:
     # Top view: orthographic down at natural bounds.
     populate(ax_top,   elev=90.0, azim=-90.0, title="TOP", zoom=1.05)
     # Side views: zoom in + exaggerate Z slightly so a shallow roof reads
-    # clearly as a sloped surface rather than a flat line.
-    populate(ax_front, elev=SIDE_TILT, azim=-90.0, title="FRONT",
+    # clearly as a sloped surface rather than a flat line. Labeled with
+    # cardinal directions (N/S/E/W) instead of FRONT/RIGHT/BACK/LEFT for
+    # cardinal-orientation reading on the cutsheet.
+    populate(ax_front, elev=SIDE_TILT, azim=-90.0, title="N",
              zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_right, elev=SIDE_TILT, azim=0.0,   title="RIGHT",
+    populate(ax_right, elev=SIDE_TILT, azim=0.0,   title="S",
              zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_back,  elev=SIDE_TILT, azim=90.0,  title="BACK",
+    populate(ax_back,  elev=SIDE_TILT, azim=90.0,  title="E",
              zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_left,  elev=SIDE_TILT, azim=180.0, title="LEFT",
+    populate(ax_left,  elev=SIDE_TILT, azim=180.0, title="W",
              zoom=SIDE_ZOOM, exaggerate_z=1.6)
 
     fd, tmp = tempfile.mkstemp(suffix=".png")
@@ -1915,10 +2396,12 @@ def generate_shop_drawings(
     log.info("shop_drawings: %d panels, %d sheets, total sheet LF = %.1f ft",
              len(panels), n_sheets, total_lf)
 
-    # Dynamic page count: panel layout + edge/trim pages + sheet cut list
-    # + combined edge detail + 3D views
+    # Dynamic page count: panel layout + 2 wireframe pages (clean + dimensioned)
+    # + edge/trim pages + per-panel cut list + consolidated cut summary
+    # (may span multiple pages) + combined edge detail + 3D views
     n_p2 = _num_edge_trim_pages(roof)
-    total_pages = 1 + n_p2 + 1 + 1 + 1
+    n_cut = _num_cut_summary_pages(roof)
+    total_pages = 1 + 2 + n_p2 + 1 + n_cut + 1 + 1
 
     c = pdfcanvas.Canvas(str(output_path), pagesize=ANSI_B_PORTRAIT)
 
@@ -1926,19 +2409,38 @@ def generate_shop_drawings(
     _render_page1(c, roof, page_num=1, total_pages=total_pages)
     c.showPage()
 
+    log.info("shop_drawings: rendering page 2 (wireframe — clean)")
+    _render_page_wireframe(c, roof, with_dimensions=False,
+                           page_num=2, total_pages=total_pages)
+    c.showPage()
+
+    log.info("shop_drawings: rendering page 3 (wireframe — dimensioned)")
+    _render_page_wireframe(c, roof, with_dimensions=True,
+                           page_num=3, total_pages=total_pages)
+    c.showPage()
+
     for i in range(n_p2):
         log.info("shop_drawings: rendering page %d (edge / trim diagram %d/%d)",
-                 2 + i, i + 1, n_p2)
+                 4 + i, i + 1, n_p2)
         _render_page2(c, roof, chunk_index=i,
-                      page_num=2 + i, total_pages=total_pages)
+                      page_num=4 + i, total_pages=total_pages)
         c.showPage()
 
-    p3_num = 2 + n_p2
+    p3_num = 4 + n_p2
     log.info("shop_drawings: rendering page %d (sheet cut list)", p3_num)
     _render_page3(c, roof, formulas, page_num=p3_num, total_pages=total_pages)
     c.showPage()
 
-    p4_num = p3_num + 1
+    p_cut_first = p3_num + 1
+    for ci in range(n_cut):
+        p_cut_num = p_cut_first + ci
+        log.info("shop_drawings: rendering page %d (cut summary %d/%d)",
+                 p_cut_num, ci + 1, n_cut)
+        _render_page_cut_summary(c, roof, chunk_index=ci, n_chunks=n_cut,
+                                 page_num=p_cut_num, total_pages=total_pages)
+        c.showPage()
+
+    p4_num = p_cut_first + n_cut
     log.info("shop_drawings: rendering page %d (combined edge detail)", p4_num)
     _render_page4(c, roof, formulas, page_num=p4_num, total_pages=total_pages)
     c.showPage()
