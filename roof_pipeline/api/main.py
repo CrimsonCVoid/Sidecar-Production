@@ -18,6 +18,7 @@ from .pipeline import router as pipeline_router
 from .schemas import ErrorResponse
 from .snap import router as snap_router
 from .solar import router as solar_router
+from .straighten import router as straighten_router
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +87,7 @@ async def logging_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 app.include_router(snap_router, prefix="/api/snap", tags=["snap"])
 app.include_router(pipeline_router, prefix="/api/pipeline", tags=["pipeline"])
+app.include_router(straighten_router, prefix="/api/pipeline", tags=["pipeline"])
 app.include_router(labels_router, prefix="/api/labels", tags=["labels"])
 app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 app.include_router(solar_router, prefix="/api/solar", tags=["solar"])

@@ -91,10 +91,27 @@ def polygons_from_clicks(
         rows = corners_pix[:, 1]
         xs_m = cols * res_m
         ys_m = -rows * res_m  # match planes.py: +y = north for north-up DSMs
-        zs_m = _bilinear_sample(dsm, cols, rows)
 
-        verts_3d = np.stack([xs_m, ys_m, zs_m], axis=1)
-        verts_proj = _project_onto_plane(verts_3d, planes[pid])
+        # Vertical projection onto the panel's plane: keep the labeler's
+        # exact XY and solve Z from the plane equation n·p = d. Mirrors
+        # the frontend /api/pipeline/cutsheet-data endpoint, so shared
+        # pixel corners (welded by the labeler's vertex magnet at identical
+        # col/row) land at identical XY in plan view instead of drifting
+        # apart when each panel's corner is orthogonally projected onto
+        # a different plane. Result is still exactly planar (every vertex
+        # satisfies n·p = d), so downstream triangulation is unaffected.
+        plane = planes[pid]
+        nx, ny, nz = plane.normal
+        if abs(nz) < 1e-9:
+            # Near-vertical plane (shouldn't happen for roofs). Fall back
+            # to DSM sample + orthogonal projection so the vertex still
+            # lies on the plane.
+            zs_m = _bilinear_sample(dsm, cols, rows)
+            verts_3d = np.stack([xs_m, ys_m, zs_m], axis=1)
+            verts_proj = _project_onto_plane(verts_3d, plane)
+        else:
+            zs_on_plane = (plane.d - nx * xs_m - ny * ys_m) / nz
+            verts_proj = np.stack([xs_m, ys_m, zs_on_plane], axis=1)
 
         polygons[pid] = verts_proj
         log.info("panel %d: %d clicked corners (no contour re-trace)",

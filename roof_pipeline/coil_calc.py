@@ -32,26 +32,65 @@ from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
-# Material / gauge spec table
+# Material / gauge spec table — CMG-calibrated
 # ---------------------------------------------------------------------------
-# Source: public ASTM A653 / Aluminum Association nominals + common supplier
-# sheet stock densities. TODO: reconcile against the supplier spec sheets the
-# team has on file (we have at least one in data/ somewhere). Keys are
-# (material, gauge) → {thickness_in, lb_per_sqft}.
+# Verified against CMG coil-calculator worked examples:
+#   Aluminum 0.032 / ID 12 / W 9 / T 8  → 1309 LF, 982 SF, 437 lb
+#   Steel    28ga  / ID 8  / W 10 / T 12 → 4217 LF, 3515 SF, 2197 lb
+#   Copper   12oz  / ID 11 / W 12 / T 10 → 3394 LF, 3394 SF, 2546 lb
+#
+# Densities CMG uses (back-solved from the above):
+#   Steel    : 0.2914 lb/in^3   (galvanized — base metal + zinc)
+#   Aluminum : 0.0966 lb/in^3   (commercial sheet)
+#   Copper   : sheet weight is the named oz/sqft directly (oz/sqft ÷ 16 = lb/sqft)
+#
+# Steel gauges follow the Manufacturer's Standard Gage (carbon steel).
+# Aluminum "gauges" are decimal-inch thicknesses.
+# Copper "gauges" are oz/sqft (industry standard for sheet copper).
+_STEEL_DENSITY_LB_IN3 = 0.2914
+_ALUMINUM_DENSITY_LB_IN3 = 0.0966
+
+def _steel(thickness_in: float) -> dict[str, float]:
+    return {
+        "thickness_in": thickness_in,
+        "lb_per_sqft": thickness_in * _STEEL_DENSITY_LB_IN3 * 144.0,
+    }
+
+def _aluminum(thickness_in: float) -> dict[str, float]:
+    return {
+        "thickness_in": thickness_in,
+        "lb_per_sqft": thickness_in * _ALUMINUM_DENSITY_LB_IN3 * 144.0,
+    }
+
+def _copper(oz_per_sqft: float, thickness_in: float) -> dict[str, float]:
+    # Copper sheet is sold by oz/sqft; weight comes straight from that spec.
+    return {
+        "thickness_in": thickness_in,
+        "lb_per_sqft": oz_per_sqft / 16.0,
+    }
+
 COIL_SPECS: dict[str, dict[str, dict[str, float]]] = {
-    "steel": {  # galvanized / galvalume / painted steel (ASTM A653 nominal)
-        "22ga": {"thickness_in": 0.0299, "lb_per_sqft": 1.406},
-        "24ga": {"thickness_in": 0.0239, "lb_per_sqft": 1.156},
-        "26ga": {"thickness_in": 0.0179, "lb_per_sqft": 0.906},
+    "steel": {
+        "20ga": _steel(0.0359),
+        "22ga": _steel(0.0299),
+        "24ga": _steel(0.0239),
+        "26ga": _steel(0.0179),
+        "28ga": _steel(0.0149),
+        "30ga": _steel(0.0120),
     },
     "aluminum": {
-        "0.032": {"thickness_in": 0.032, "lb_per_sqft": 0.451},
-        "0.040": {"thickness_in": 0.040, "lb_per_sqft": 0.564},
-        "0.050": {"thickness_in": 0.050, "lb_per_sqft": 0.705},
+        "0.024": _aluminum(0.024),
+        "0.027": _aluminum(0.027),
+        "0.032": _aluminum(0.032),
+        "0.040": _aluminum(0.040),
+        "0.050": _aluminum(0.050),
+        "0.063": _aluminum(0.063),
     },
     "copper": {
-        "16oz": {"thickness_in": 0.0216, "lb_per_sqft": 1.000},
-        "20oz": {"thickness_in": 0.0270, "lb_per_sqft": 1.250},
+        "12oz": _copper(12.0, 0.0162),
+        "16oz": _copper(16.0, 0.0216),
+        "20oz": _copper(20.0, 0.0270),
+        "24oz": _copper(24.0, 0.0323),
     },
 }
 

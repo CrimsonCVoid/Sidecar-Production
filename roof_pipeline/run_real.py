@@ -63,7 +63,6 @@ def run_pipeline(
     *,
     snap_tol: float = 1.0,
     use_snap_v2: bool = False,
-    skip_snap: bool = False,
     no_clicks: bool = False,
     panels_json_path: Path | None = None,
     project_name: str = "ROOF PROTOTYPE",
@@ -138,14 +137,15 @@ def run_pipeline(
 
     features_path: Path | None = None
 
-    if skip_snap:
-        # New labeler enforces shared corner points across adjacent panels
-        # at click time, so snapping is a no-op (and worse: it can drift
-        # already-shared coordinates by sub-millimeter amounts that show
-        # up in PDF dimensions). Bypass both snap engines entirely when
-        # the caller signals it has trustworthy shared-node input.
-        log.info("=== snap (skipped — shared-node input from labeler) ===")
-    elif use_snap_v2:
+    # Preserve the labeler's raw, user-placed corners for the shop-drawings PDF
+    # so it renders identically to the frontend Cut Sheet diagram
+    # (/api/pipeline/cutsheet-data, which does not run topology snap). The
+    # snap engine is still run below to keep the 3D mesh gap-free; it just
+    # doesn't get to move the shop-drawings vertices around after the user
+    # has already ortho-aligned them in the labeler.
+    raw_polygons = {pid: p.copy() for pid, p in polygons.items()}
+
+    if use_snap_v2:
         log.info("=== snap-v2 engine (tol=%.3f m) ===", snap_tol)
         polygons, feature_graph = snap_v2(polygons, planes, tol=snap_tol)
 
@@ -172,14 +172,24 @@ def run_pipeline(
     mesh = build_roof_mesh(polygons, planes)
     mesh_paths = export_mesh(mesh, out_dir)
 
-    log.info("=== cut sheets ===")
+    # Cut sheets and TS JSON now render the labeler's raw, user-placed
+    # corners instead of the snap-mutated polygons. The labeler produces
+    # shared nodes (same vertex shared between adjacent panels), so the
+    # snap engine is no longer needed to close gaps in PDF output --
+    # running it on already-shared nodes only introduces sub-millimeter
+    # drift between what the user drew and what the PDF prints. Shop
+    # drawings already used raw_polygons; this brings the other two PDFs
+    # into line with that. snap_v2 above is left running so the 3D mesh
+    # stays gap-free for any legacy project that doesn't use the
+    # shared-node labeler.
+    log.info("=== cut sheets (raw labeler polygons) ===")
     pdf_path = write_cutsheets_pdf(
-        polygons, planes, mesh, out_dir / "cutsheets.pdf",
+        raw_polygons, planes, mesh, out_dir / "cutsheets.pdf",
     )
 
-    log.info("=== TS exporter JSON ===")
+    log.info("=== TS exporter JSON (raw labeler polygons) ===")
     json_path = write_ts_json(
-        polygons, planes, mesh, out_dir / "cutsheets.ts.json",
+        raw_polygons, planes, mesh, out_dir / "cutsheets.ts.json",
     )
 
     log.info("=== TS-render PDF (mirrors browser output) ===")
@@ -194,7 +204,7 @@ def run_pipeline(
         "project_address": project_address,
     }
     roof_dict = roof_dict_from_pipeline(
-        polygons, planes, project_meta,
+        raw_polygons, planes, project_meta,
         coverage_width_in=coverage_in,
         waste_pct=waste_pct,
         profile=profile,
