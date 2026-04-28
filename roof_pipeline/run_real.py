@@ -63,6 +63,7 @@ def run_pipeline(
     *,
     snap_tol: float = 1.0,
     use_snap_v2: bool = False,
+    skip_snap: bool = False,
     no_clicks: bool = False,
     panels_json_path: Path | None = None,
     project_name: str = "ROOF PROTOTYPE",
@@ -137,7 +138,14 @@ def run_pipeline(
 
     features_path: Path | None = None
 
-    if use_snap_v2:
+    if skip_snap:
+        # New labeler enforces shared corner points across adjacent panels
+        # at click time, so snapping is a no-op (and worse: it can drift
+        # already-shared coordinates by sub-millimeter amounts that show
+        # up in PDF dimensions). Bypass both snap engines entirely when
+        # the caller signals it has trustworthy shared-node input.
+        log.info("=== snap (skipped — shared-node input from labeler) ===")
+    elif use_snap_v2:
         log.info("=== snap-v2 engine (tol=%.3f m) ===", snap_tol)
         polygons, feature_graph = snap_v2(polygons, planes, tol=snap_tol)
 

@@ -485,7 +485,13 @@ async def generate_pdf(
             mask_arr,
             actual_res,
             out_dir,
-            use_snap_v2=True,
+            # The labeler now enforces shared corner points across
+            # adjacent panels at click time, so the snap engines have
+            # nothing to do here -- and running them adds sub-millimeter
+            # drift to coordinates that should remain identical to what
+            # the user placed. skip_snap=True is the new norm; legacy
+            # mask-only projects (no panels.json) still go through snap.
+            skip_snap=panels_json is not None,
             panels_json_path=panels_json,
             project_name=address,
             project_address=address,
