@@ -498,11 +498,25 @@ async def generate_pdf(
             estimate_number=sample_id[:8],
         )
 
-        # Find the cutsheets PDF
-        pdf_path = output_paths.get("cutsheets_pdf")
+        # Return the Integrity-Metals shop-drawings PDF — the 10-page wireframe
+        # + dimensioned wireframe + edge/trim diagrams + per-panel sheet cut
+        # list + total cut list + MRQ. This is the production PDF the field
+        # uses; the legacy single-page cutsheets.pdf and the TS-render
+        # cutsheets.ts.pdf are kept on disk for debugging only and must not
+        # be served to clients.
+        #
+        # The previous lookup used key "cutsheets_pdf" which run_pipeline
+        # never returns, so it fell through to out_dir.glob("*.pdf") and
+        # served whichever PDF the filesystem happened to hand back first
+        # (typically the deprecated cutsheets.pdf).
+        pdf_path = output_paths.get("shop_pdf")
         if pdf_path is None or not pdf_path.exists():
-            # Try any PDF in output
-            pdfs = list(out_dir.glob("*.pdf"))
+            # Last-resort fallback: prefer shop_drawings.pdf by filename so a
+            # missing key doesn't silently regress to the deprecated PDF.
+            pdfs = sorted(
+                out_dir.glob("*.pdf"),
+                key=lambda p: 0 if p.name == "shop_drawings.pdf" else 1,
+            )
             pdf_path = pdfs[0] if pdfs else None
 
         if pdf_path is None or not pdf_path.exists():
