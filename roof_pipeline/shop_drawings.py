@@ -397,6 +397,85 @@ def _panel_slope_num(panel: dict, fallback: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Polygon helpers — used by panel-label badge placement so labels never
+# clip into adjacent panels. We need (1) a label origin that's
+# guaranteed inside the polygon, even for concave shapes where the
+# centroid may sit outside, and (2) the distance from that origin to
+# the closest edge so we can shrink the badge to fit.
+# ---------------------------------------------------------------------------
+
+def _point_in_polygon(point: np.ndarray, poly: np.ndarray) -> bool:
+    """Standard ray-casting point-in-polygon. `poly` is Nx2."""
+    x, y = float(point[0]), float(point[1])
+    inside = False
+    n = len(poly)
+    j = n - 1
+    for i in range(n):
+        xi, yi = float(poly[i, 0]), float(poly[i, 1])
+        xj, yj = float(poly[j, 0]), float(poly[j, 1])
+        if ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi
+        ):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _distance_to_nearest_edge(poly: np.ndarray, point: np.ndarray) -> float:
+    """Euclidean distance from `point` to the closest edge of polygon `poly`."""
+    n = len(poly)
+    if n == 0:
+        return 0.0
+    min_d = float("inf")
+    for i in range(n):
+        a = poly[i]
+        b = poly[(i + 1) % n]
+        ab = b - a
+        ap = point - a
+        ab_len_sq = float(ab @ ab)
+        if ab_len_sq <= 0:
+            continue
+        t = max(0.0, min(1.0, float(ap @ ab) / ab_len_sq))
+        proj = a + t * ab
+        d = float(np.linalg.norm(point - proj))
+        if d < min_d:
+            min_d = d
+    return min_d if min_d != float("inf") else 0.0
+
+
+def _label_origin(poly: np.ndarray) -> np.ndarray:
+    """Return a point inside the polygon suitable for a label.
+
+    For convex panels the centroid is usually fine. For concave panels
+    the centroid can sit outside, so we fall back to a coarse grid
+    search inside the polygon's bounding box, picking the inside point
+    that maximizes distance to the nearest edge (a cheap polylabel
+    approximation).
+    """
+    centroid = poly.mean(axis=0)
+    if _point_in_polygon(centroid, poly):
+        return centroid
+    mn = poly.min(axis=0)
+    mx = poly.max(axis=0)
+    # 9×9 grid is enough for typical roof panels; the badge is only ~22pt
+    # across so sub-grid precision doesn't matter.
+    best = centroid
+    best_d = -1.0
+    for ix in range(1, 10):
+        for iy in range(1, 10):
+            x = mn[0] + (mx[0] - mn[0]) * ix / 10.0
+            y = mn[1] + (mx[1] - mn[1]) * iy / 10.0
+            p = np.array([x, y])
+            if not _point_in_polygon(p, poly):
+                continue
+            d = _distance_to_nearest_edge(poly, p)
+            if d > best_d:
+                best_d = d
+                best = p
+    return best
+
+
+# ---------------------------------------------------------------------------
 # Drawing primitives
 # ---------------------------------------------------------------------------
 
@@ -718,24 +797,53 @@ def _render_page1(
         _draw_polygon(c, outline_pg, line_width=2.0, stroke=panel_color[idx])
 
         # Section ID badge: white fill, colored border, DARK text so it's
-        # readable on every color in the palette (S4 yellow-on-white was
-        # invisible in v2).
-        cx, cy = outline_pg.mean(axis=0)
-        # Use the labeler's `id` first (frontend source of truth), then
-        # legacy `panel_id`, then positional fallback. Keeps the PDF in
-        # sync with what the user sees in the labeler and cut-sheet tab.
+        # readable on every color in the palette. Auto-shrinks so the
+        # badge always fits inside the panel's polygon — a fixed 11pt
+        # radius clipped into adjacent panels on tight roofs. No leader
+        # lines: every label sits on the panel it labels.
         raw_id = panels[idx].get("id")
         if raw_id is None:
             raw_id = panels[idx].get("panel_id", idx + 1)
-        sid = str(raw_id)
+        sid = str(raw_id).replace("panel_", "P")
+
+        origin = _label_origin(outline_pg)
+        max_r = _distance_to_nearest_edge(outline_pg, origin)
+        BADGE_R = 11.0
+        FONT_SZ = 9.0
+        MIN_BADGE_R = 4.5
+        MIN_FONT_SZ = 5.0
+        # 92% so the stroke doesn't kiss the polygon edge.
+        usable_r = max(0.0, max_r * 0.92)
+
+        if usable_r >= BADGE_R:
+            badge_r, font_sz = BADGE_R, FONT_SZ
+        elif usable_r >= MIN_BADGE_R:
+            scale = usable_r / BADGE_R
+            badge_r = max(MIN_BADGE_R, BADGE_R * scale)
+            font_sz = max(MIN_FONT_SZ, FONT_SZ * scale)
+        else:
+            # Panel too small for a circle. Drop the badge, draw text
+            # scaled to fit — never below MIN_FONT_SZ (better to clip a
+            # touch than disappear).
+            badge_r = 0.0
+            text_max_w = max(usable_r * 2.0, 1.0)
+            font_sz = MIN_FONT_SZ
+            for trial in (FONT_SZ, 8.0, 7.0, 6.0):
+                if c.stringWidth(sid, FONT_BOLD, trial) <= text_max_w:
+                    font_sz = trial
+                    break
+
         c.saveState()
-        c.setFillColor(colors.white)
-        c.setStrokeColor(panel_color[idx])
-        c.setLineWidth(1.2)
-        c.circle(float(cx), float(cy), 11, stroke=1, fill=1)
+        if badge_r > 0:
+            c.setFillColor(colors.white)
+            c.setStrokeColor(panel_color[idx])
+            c.setLineWidth(min(1.2, badge_r * 0.12))
+            c.circle(float(origin[0]), float(origin[1]), badge_r, stroke=1, fill=1)
         c.setFillColor(colors.HexColor("#222222"))
-        c.setFont(FONT_BOLD, 9)
-        c.drawCentredString(float(cx), float(cy) - 3.0, sid.replace("panel_", "P"))
+        c.setFont(FONT_BOLD, font_sz)
+        c.drawCentredString(
+            float(origin[0]), float(origin[1]) - font_sz * 0.33, sid,
+        )
         c.restoreState()
 
     # ---- (PANELS legend intentionally omitted — per-panel sheet totals live
