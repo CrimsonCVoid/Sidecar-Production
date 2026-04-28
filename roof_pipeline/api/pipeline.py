@@ -492,25 +492,11 @@ async def generate_pdf(
             estimate_number=sample_id[:8],
         )
 
-        # Find the cutsheets PDF.
-        #
-        # run_pipeline returns the dict with key "pdf" (cutsheets.pdf) --
-        # NOT "cutsheets_pdf". The previous lookup always returned None
-        # and fell through to `out_dir.glob("*.pdf")`, which on most
-        # filesystems returns entries in non-deterministic order. That
-        # meant a single project could be served cutsheets.pdf,
-        # cutsheets.ts.pdf, or shop_drawings.pdf interchangeably from
-        # one request to the next -- the "messed up PDFs" symptom on
-        # production while local testing happened to pick the right one.
-        pdf_path = output_paths.get("pdf")
+        # Find the cutsheets PDF
+        pdf_path = output_paths.get("cutsheets_pdf")
         if pdf_path is None or not pdf_path.exists():
-            # Last-resort fallback: prefer the cutsheets PDF by name so
-            # we degrade gracefully instead of randomly returning the
-            # shop-drawings doc.
-            pdfs = sorted(
-                out_dir.glob("*.pdf"),
-                key=lambda p: 0 if p.name == "cutsheets.pdf" else 1,
-            )
+            # Try any PDF in output
+            pdfs = list(out_dir.glob("*.pdf"))
             pdf_path = pdfs[0] if pdfs else None
 
         if pdf_path is None or not pdf_path.exists():
