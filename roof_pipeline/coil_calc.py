@@ -88,14 +88,17 @@ COIL_SPECS: dict[str, dict[str, dict[str, float]]] = {
         "26ga": {"thickness_in": 0.0179, "lb_per_sqft": 0.798},
         "28ga": _steel(0.0149),
         "29ga": {"thickness_in": 0.0135, "lb_per_sqft": 0.60},
-        "30ga": _steel(0.0120),
+        # Renamed from "30ga" to "92ga" per user request (2026-04-28).
+        # Thickness preserved — only the display key changed.
+        "92ga": _steel(0.0120),
     },
     "aluminum": {
         # All entries derived through _aluminum() so the 1.242× supplier
         # calibration scale applies uniformly. (User request: same scale
         # factor for all sizes, not just 0.032 and 0.040.)
         "0.024": _aluminum(0.024),
-        "0.027": _aluminum(0.027),
+        # Renamed from "0.027" → "0.029" per user request (2026-04-28).
+        "0.029": _aluminum(0.029),
         "0.032": _aluminum(0.032),
         "0.040": _aluminum(0.040),
         "0.050": _aluminum(0.050),
