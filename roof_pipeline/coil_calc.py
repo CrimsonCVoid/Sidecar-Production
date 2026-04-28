@@ -56,10 +56,18 @@ def _steel(thickness_in: float) -> dict[str, float]:
         "lb_per_sqft": thickness_in * _STEEL_DENSITY_LB_IN3 * 144.0,
     }
 
+# User-supplied calibration factor (2026-04-28): their two reference
+# weights, 0.032"=0.57 lb/sqft and 0.040"=0.67 lb/sqft, average to a
+# 1.24× multiplier on the density-derived theoretical weight. Per
+# their request, the same factor is applied to every aluminum gauge
+# (the supplier delivers heavier-than-pure-aluminum coil — alloy +
+# coating + manufacturing tolerance).
+_ALUMINUM_CAL_SCALE = 1.242
+
 def _aluminum(thickness_in: float) -> dict[str, float]:
     return {
         "thickness_in": thickness_in,
-        "lb_per_sqft": thickness_in * _ALUMINUM_DENSITY_LB_IN3 * 144.0,
+        "lb_per_sqft": thickness_in * _ALUMINUM_DENSITY_LB_IN3 * 144.0 * _ALUMINUM_CAL_SCALE,
     }
 
 def _copper(oz_per_sqft: float, thickness_in: float) -> dict[str, float]:
@@ -83,10 +91,13 @@ COIL_SPECS: dict[str, dict[str, dict[str, float]]] = {
         "30ga": _steel(0.0120),
     },
     "aluminum": {
+        # All entries derived through _aluminum() so the 1.242× supplier
+        # calibration scale applies uniformly. (User request: same scale
+        # factor for all sizes, not just 0.032 and 0.040.)
         "0.024": _aluminum(0.024),
         "0.027": _aluminum(0.027),
-        "0.032": {"thickness_in": 0.032, "lb_per_sqft": 0.57},
-        "0.040": {"thickness_in": 0.040, "lb_per_sqft": 0.67},
+        "0.032": _aluminum(0.032),
+        "0.040": _aluminum(0.040),
         "0.050": _aluminum(0.050),
         "0.063": _aluminum(0.063),
     },
