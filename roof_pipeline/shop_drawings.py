@@ -796,55 +796,57 @@ def _render_page1(
         outline_pg = np.array([_world_to_page(p, scale, offset) for p in outline])
         _draw_polygon(c, outline_pg, line_width=2.0, stroke=panel_color[idx])
 
-        # Section ID badge: white fill, colored border, DARK text so it's
-        # readable on every color in the palette. Auto-shrinks so the
-        # badge always fits inside the panel's polygon — a fixed 11pt
-        # radius clipped into adjacent panels on tight roofs. No leader
-        # lines: every label sits on the panel it labels.
-        raw_id = panels[idx].get("id")
-        if raw_id is None:
-            raw_id = panels[idx].get("panel_id", idx + 1)
-        sid = str(raw_id).replace("panel_", "P")
-
-        origin = _label_origin(outline_pg)
-        max_r = _distance_to_nearest_edge(outline_pg, origin)
-        BADGE_R = 11.0
-        FONT_SZ = 9.0
-        MIN_BADGE_R = 4.5
-        MIN_FONT_SZ = 5.0
-        # 92% so the stroke doesn't kiss the polygon edge.
-        usable_r = max(0.0, max_r * 0.92)
-
-        if usable_r >= BADGE_R:
-            badge_r, font_sz = BADGE_R, FONT_SZ
-        elif usable_r >= MIN_BADGE_R:
-            scale = usable_r / BADGE_R
-            badge_r = max(MIN_BADGE_R, BADGE_R * scale)
-            font_sz = max(MIN_FONT_SZ, FONT_SZ * scale)
-        else:
-            # Panel too small for a circle. Drop the badge, draw text
-            # scaled to fit — never below MIN_FONT_SZ (better to clip a
-            # touch than disappear).
-            badge_r = 0.0
-            text_max_w = max(usable_r * 2.0, 1.0)
-            font_sz = MIN_FONT_SZ
-            for trial in (FONT_SZ, 8.0, 7.0, 6.0):
-                if c.stringWidth(sid, FONT_BOLD, trial) <= text_max_w:
-                    font_sz = trial
-                    break
-
-        c.saveState()
-        if badge_r > 0:
-            c.setFillColor(colors.white)
-            c.setStrokeColor(panel_color[idx])
-            c.setLineWidth(min(1.2, badge_r * 0.12))
-            c.circle(float(origin[0]), float(origin[1]), badge_r, stroke=1, fill=1)
-        c.setFillColor(colors.HexColor("#222222"))
-        c.setFont(FONT_BOLD, font_sz)
-        c.drawCentredString(
-            float(origin[0]), float(origin[1]) - font_sz * 0.33, sid,
-        )
-        c.restoreState()
+        # ─────────────────────────────────────────────────────────────────
+        # Panel ID badge — DISABLED PER USER REQUEST (2026-04-28).
+        # Kept commented out so re-enabling later is a single uncomment.
+        # The auto-shrink-to-fit logic still relies on _label_origin and
+        # _distance_to_nearest_edge (defined above), which are also used
+        # by other label placement code, so we leave those helpers in
+        # place. To restore, uncomment the block below.
+        # ─────────────────────────────────────────────────────────────────
+        # raw_id = panels[idx].get("id")
+        # if raw_id is None:
+        #     raw_id = panels[idx].get("panel_id", idx + 1)
+        # sid = str(raw_id).replace("panel_", "P")
+        #
+        # origin = _label_origin(outline_pg)
+        # max_r = _distance_to_nearest_edge(outline_pg, origin)
+        # BADGE_R = 11.0
+        # FONT_SZ = 9.0
+        # MIN_BADGE_R = 4.5
+        # MIN_FONT_SZ = 5.0
+        # # 92% so the stroke doesn't kiss the polygon edge.
+        # usable_r = max(0.0, max_r * 0.92)
+        #
+        # if usable_r >= BADGE_R:
+        #     badge_r, font_sz = BADGE_R, FONT_SZ
+        # elif usable_r >= MIN_BADGE_R:
+        #     scale = usable_r / BADGE_R
+        #     badge_r = max(MIN_BADGE_R, BADGE_R * scale)
+        #     font_sz = max(MIN_FONT_SZ, FONT_SZ * scale)
+        # else:
+        #     # Panel too small for a circle. Drop the badge, draw text
+        #     # scaled to fit — never below MIN_FONT_SZ.
+        #     badge_r = 0.0
+        #     text_max_w = max(usable_r * 2.0, 1.0)
+        #     font_sz = MIN_FONT_SZ
+        #     for trial in (FONT_SZ, 8.0, 7.0, 6.0):
+        #         if c.stringWidth(sid, FONT_BOLD, trial) <= text_max_w:
+        #             font_sz = trial
+        #             break
+        #
+        # c.saveState()
+        # if badge_r > 0:
+        #     c.setFillColor(colors.white)
+        #     c.setStrokeColor(panel_color[idx])
+        #     c.setLineWidth(min(1.2, badge_r * 0.12))
+        #     c.circle(float(origin[0]), float(origin[1]), badge_r, stroke=1, fill=1)
+        # c.setFillColor(colors.HexColor("#222222"))
+        # c.setFont(FONT_BOLD, font_sz)
+        # c.drawCentredString(
+        #     float(origin[0]), float(origin[1]) - font_sz * 0.33, sid,
+        # )
+        # c.restoreState()
 
     # ---- (PANELS legend intentionally omitted — per-panel sheet totals live
     #      on the cut-summary pages, not on the plan sheet)
