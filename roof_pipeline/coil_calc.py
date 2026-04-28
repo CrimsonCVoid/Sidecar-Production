@@ -70,19 +70,23 @@ def _copper(oz_per_sqft: float, thickness_in: float) -> dict[str, float]:
     }
 
 COIL_SPECS: dict[str, dict[str, dict[str, float]]] = {
+    # Per-gauge lb/sqft overrides supplied by the user (2026-04-28).
+    # These reflect their actual coil-supplier weights and override the
+    # density-derived defaults from _steel/_aluminum where specified.
     "steel": {
         "20ga": _steel(0.0359),
         "22ga": _steel(0.0299),
-        "24ga": _steel(0.0239),
-        "26ga": _steel(0.0179),
+        "24ga": {"thickness_in": 0.0239, "lb_per_sqft": 0.9245},
+        "26ga": {"thickness_in": 0.0179, "lb_per_sqft": 0.798},
         "28ga": _steel(0.0149),
+        "29ga": {"thickness_in": 0.0135, "lb_per_sqft": 0.60},
         "30ga": _steel(0.0120),
     },
     "aluminum": {
         "0.024": _aluminum(0.024),
         "0.027": _aluminum(0.027),
-        "0.032": _aluminum(0.032),
-        "0.040": _aluminum(0.040),
+        "0.032": {"thickness_in": 0.032, "lb_per_sqft": 0.57},
+        "0.040": {"thickness_in": 0.040, "lb_per_sqft": 0.67},
         "0.050": _aluminum(0.050),
         "0.063": _aluminum(0.063),
     },
