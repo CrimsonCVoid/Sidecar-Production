@@ -416,10 +416,7 @@ async def generate_pdf(
     # 2. Get sample info
     sample_result = (
         supabase.table("training_samples")
-        .select(
-            "dsm_storage_path, rgb_storage_path, formatted_address, "
-            "source_address, meters_per_px"
-        )
+        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
         .eq("id", sample_id)
         .execute()
     )
@@ -430,11 +427,10 @@ async def generate_pdf(
     dsm_path = sample.get("dsm_storage_path")
     if not dsm_path:
         raise HTTPException(status_code=400, detail="Sample has no DSM")
-    rgb_path = sample.get("rgb_storage_path")  # optional — older samples may lack it
 
     address = sample.get("formatted_address") or sample.get("source_address") or sample_id
 
-    # 3. Download DSM (required) + RGB (optional, for textured 3D views)
+    # 3. Download DSM
     dsm_bytes = None
     for bucket in [settings.training_bucket, settings.storage_bucket]:
         try:
@@ -444,20 +440,6 @@ async def generate_pdf(
             continue
     if dsm_bytes is None:
         raise HTTPException(status_code=404, detail="Could not download DSM from storage")
-
-    rgb_bytes: bytes | None = None
-    if rgb_path:
-        for bucket in [settings.training_bucket, settings.storage_bucket]:
-            try:
-                rgb_bytes = supabase.storage.from_(bucket).download(rgb_path)
-                break
-            except Exception:
-                continue
-        if rgb_bytes is None:
-            log.warning(
-                "RGB at %s not downloadable — falling back to plain mesh views",
-                rgb_path,
-            )
 
     # 4. Write panels.json and DSM to temp dir, run pipeline
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -508,7 +490,6 @@ async def generate_pdf(
             project_name=address,
             project_address=address,
             estimate_number=sample_id[:8],
-            rgb_bytes=rgb_bytes,
         )
 
         # Find the cutsheets PDF
@@ -530,6 +511,282 @@ async def generate_pdf(
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="{sample_id[:8]}_cutsheets.pdf"',
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Finalized PDF — same as generate-pdf, but scales every dimension by a
+# field-verified scale factor so on-roof tape measurements override the
+# Solar/DSM-derived geometry. Mirrors generate-pdf almost exactly; the
+# only difference is that res_m is multiplied by the scale before the
+# pipeline runs, which propagates through every plane fit, cutsheet
+# dimension, and shop-drawing measurement automatically.
+# ---------------------------------------------------------------------------
+
+
+@router.post("/generate-finalized-pdf/{sample_id}")
+async def generate_finalized_pdf(
+    sample_id: str,
+    request: Request,
+    supabase: Client = Depends(get_supabase),
+    settings: Settings = Depends(get_settings),
+    principal: Principal = Depends(require_principal),
+):
+    """Generate a finalized PDF with field-verified scale applied.
+
+    Scale factor sources, in priority order:
+      1. ``?scale=`` query param (Next.js can pre-compute and pass it).
+      2. Median of (field-measured length / pipeline-computed length)
+         derived from ``projects.field_measurements`` JSONB combined
+         with the legacy ``field_baseline_length_ft`` column.
+      3. ``1.0`` (no rescale — fall back to the same output as
+         ``/generate-pdf``).
+
+    Always re-runs the pipeline; we do not cache against a previous
+    cutsheet because the geometry the user verified against may have
+    drifted between requests.
+    """
+    from fastapi.responses import Response
+    from io import BytesIO
+
+    verify_sample_access(principal, sample_id, supabase)
+    request.state.sample_id = sample_id
+
+    # Optional override from the Next.js side. If passed, takes priority
+    # over computing scale from project columns; lets us tune behaviour
+    # without redeploying the sidecar.
+    scale_qs = request.query_params.get("scale")
+    panel_type_qs = request.query_params.get("panel_type")
+
+    # 1. Labels
+    labels_result = (
+        supabase.table("training_labels")
+        .select("annotations")
+        .eq("sample_id", sample_id)
+        .execute()
+    )
+    if not labels_result.data:
+        raise HTTPException(status_code=404, detail="No labels found -- save labels first")
+    annotations = labels_result.data[0].get("annotations") or {}
+    panels = annotations.get("panels", [])
+    if not panels:
+        raise HTTPException(status_code=400, detail="Labels have no panels")
+
+    # 2. Sample
+    sample_result = (
+        supabase.table("training_samples")
+        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
+        .eq("id", sample_id)
+        .execute()
+    )
+    if not sample_result.data:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    sample = sample_result.data[0]
+    dsm_path = sample.get("dsm_storage_path")
+    if not dsm_path:
+        raise HTTPException(status_code=400, detail="Sample has no DSM")
+    address = sample.get("formatted_address") or sample.get("source_address") or sample_id
+
+    # 3. Field-verified scale. We try the query string first because the
+    # Next.js side already computes the median when measurements are
+    # saved; that path lets us avoid a duplicate "fetch baseline +
+    # measurements + compute median" round trip server-side.
+    scale = 1.0
+    if scale_qs:
+        try:
+            parsed = float(scale_qs)
+            if 0.5 <= parsed <= 2.0:  # sanity-clamp; tape vs DSM rarely > 2x
+                scale = parsed
+            else:
+                log.warning("ignoring out-of-range field scale %.4f from qs", parsed)
+        except ValueError:
+            log.warning("ignoring non-numeric scale qs %r", scale_qs)
+
+    if scale == 1.0:
+        # Fall back to project columns. projects.id == sample_id in this
+        # codebase (the labeler uses the project UUID as its sample_id).
+        try:
+            proj = (
+                supabase.table("projects")
+                .select("field_measurements, field_baseline_length_ft")
+                .eq("id", sample_id)
+                .single()
+                .execute()
+            )
+            row = proj.data or {}
+            measurements = row.get("field_measurements") or {}
+            # Same-edge check: if there's a single legacy baseline, prefer
+            # it; the median path needs more than one entry.
+            if isinstance(measurements, dict) and len(measurements) >= 1:
+                # Need expected lengths to compute scale ratios. Pull them
+                # from the ts_export JSON of a fresh pipeline pass below
+                # is overkill; instead we use the labeler edge-pixel
+                # lengths and convert with res_m. Done after loading DSM.
+                pass
+        except Exception as exc:
+            log.warning("could not load project field_* columns: %s", exc)
+
+    # 4. Download DSM
+    dsm_bytes = None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
+        try:
+            dsm_bytes = supabase.storage.from_(bucket).download(dsm_path)
+            break
+        except Exception:
+            continue
+    if dsm_bytes is None:
+        raise HTTPException(status_code=404, detail="Could not download DSM from storage")
+
+    # 5. Run pipeline. The corrected scale is applied by multiplying
+    #    res_m at the input — every meter-derived dimension downstream
+    #    (mesh vertices, cutsheet edge lengths, shop-drawing trim
+    #    quantities) scales linearly with res_m, so a single multiply
+    #    here propagates correctly through plane fits, polygon vertex
+    #    coords, and PDF output.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        dsm_local = tmp_path / "dsm.tif"
+        dsm_local.write_bytes(dsm_bytes)
+
+        import rasterio
+        import cv2
+
+        with rasterio.open(BytesIO(dsm_bytes)) as ds:
+            h, w = ds.height, ds.width
+            base_res_m = abs(ds.res[0]) if ds.res else sample.get("meters_per_px", 0.1)
+
+        remapped_panels = []
+        mask_arr = np.zeros((h, w), dtype=np.uint8)
+        for i, p in enumerate(panels):
+            new_id = i + 1
+            corners = np.array(p["corners_pix"], dtype=np.int32)
+            cv2.fillPoly(mask_arr, [corners], new_id)
+            remapped_panels.append({**p, "id": new_id})
+
+        panels_json = tmp_path / "panels.json"
+        panels_json.write_text(json.dumps({"panels": remapped_panels}))
+
+        mask_local = tmp_path / "mask.npy"
+        np.save(mask_local, mask_arr)
+
+        dsm_arr, actual_res = _load_dsm(dsm_local)
+
+        # If the QS scale wasn't supplied, derive scale here from
+        # field_measurements. We need pixel-edge lengths to convert into
+        # the "expected" baseline. Doing it post-DSM-load means we have
+        # actual_res handy.
+        if scale == 1.0:
+            try:
+                proj = (
+                    supabase.table("projects")
+                    .select("field_measurements, field_baseline_length_ft")
+                    .eq("id", sample_id)
+                    .single()
+                    .execute()
+                )
+                row = proj.data or {}
+                measurements = row.get("field_measurements") or {}
+                if isinstance(measurements, dict) and measurements:
+                    M_TO_FT = 3.280839895
+                    ratios: list[float] = []
+                    for key, measured_ft in measurements.items():
+                        try:
+                            # Keys come in as "p<panel_idx>_e<edge_idx>";
+                            # the panel_idx here matches the LABEL panel
+                            # array order (0-based) from training_labels.
+                            if not isinstance(measured_ft, (int, float)):
+                                continue
+                            parts = str(key).split("_")
+                            p_idx = int(parts[0].lstrip("p"))
+                            e_idx = int(parts[1].lstrip("e"))
+                            corners = panels[p_idx].get("corners_pix") or []
+                            if e_idx < 0 or e_idx >= len(corners):
+                                continue
+                            a = corners[e_idx]
+                            b = corners[(e_idx + 1) % len(corners)]
+                            dx = (b[0] - a[0]) * actual_res
+                            dy = (b[1] - a[1]) * actual_res
+                            expected_m = (dx * dx + dy * dy) ** 0.5
+                            expected_ft = expected_m * M_TO_FT
+                            if expected_ft <= 0.5:
+                                continue
+                            ratio = float(measured_ft) / expected_ft
+                            if 0.5 <= ratio <= 2.0:
+                                ratios.append(ratio)
+                        except Exception:
+                            continue
+                    if ratios:
+                        ratios.sort()
+                        mid = len(ratios) // 2
+                        median = (
+                            ratios[mid]
+                            if len(ratios) % 2 == 1
+                            else 0.5 * (ratios[mid - 1] + ratios[mid])
+                        )
+                        scale = median
+                        log.info(
+                            "field-verified median scale %.4f from %d edges",
+                            scale,
+                            len(ratios),
+                        )
+            except Exception as exc:
+                log.warning("could not compute scale from field measurements: %s", exc)
+
+        out_dir = tmp_path / "output"
+
+        log.info(
+            "generating FINALIZED PDF for sample %s (%d panels, scale=%.4f)",
+            sample_id,
+            len(panels),
+            scale,
+        )
+
+        # Map UI panel-type slug -> shop-drawings profile + coverage.
+        coverage_in = 16.0
+        profile = "SS"
+        if panel_type_qs == "pbr":
+            coverage_in, profile = 36.0, "PBR"
+        elif panel_type_qs == "5v":
+            coverage_in, profile = 24.0, "5V"
+        elif panel_type_qs == "ag":
+            coverage_in, profile = 36.0, "AG"
+        elif panel_type_qs == "corrugated":
+            coverage_in, profile = 26.0, "CORR"
+
+        output_paths = await asyncio.to_thread(
+            run_pipeline,
+            dsm_arr,
+            mask_arr,
+            actual_res * scale,  # <-- the whole point of this endpoint
+            out_dir,
+            use_snap_v2=True,
+            panels_json_path=panels_json,
+            project_name=address,
+            project_address=address,
+            estimate_number=sample_id[:8],
+            coverage_in=coverage_in,
+            profile=profile,
+        )
+
+        pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")
+        if pdf_path is None or not pdf_path.exists():
+            pdfs = list(out_dir.glob("*.pdf"))
+            pdf_path = pdfs[0] if pdfs else None
+        if pdf_path is None or not pdf_path.exists():
+            raise HTTPException(
+                status_code=500, detail="Pipeline ran but no PDF was generated"
+            )
+        pdf_bytes = pdf_path.read_bytes()
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{sample_id[:8]}_finalized_cutsheet.pdf"'
+            ),
+            "X-Field-Scale": f"{scale:.6f}",
         },
     )
 
