@@ -356,6 +356,32 @@ def _panel_outline_2d(panel: dict) -> np.ndarray:
     return rot[:, :2]
 
 
+def _shared_edge_key(
+    p1: list[float] | np.ndarray,
+    p2: list[float] | np.ndarray,
+    *,
+    precision: float = 0.03,  # meters; ~1.2" — survives sub-inch snap drift
+) -> tuple:
+    """Direction-invariant bucket for an edge endpoint pair.
+
+    Used to dedupe shared edges across panels: a ridge between two
+    slopes is in BOTH panels' edge lists with identical endpoints, so
+    bucketing produces the same key for both sides and we can render
+    or count it exactly once.
+    """
+    a = (
+        int(round(float(p1[0]) / precision)),
+        int(round(float(p1[1]) / precision)),
+        int(round(float(p1[2]) / precision)) if len(p1) > 2 else 0,
+    )
+    b = (
+        int(round(float(p2[0]) / precision)),
+        int(round(float(p2[1]) / precision)),
+        int(round(float(p2[2]) / precision)) if len(p2) > 2 else 0,
+    )
+    return (min(a, b), max(a, b))
+
+
 def sum_edges_by_type(roof: dict) -> dict[str, float]:
     """LF totals per edge type CODE, deduplicating shared edges.
 
@@ -690,12 +716,16 @@ def _render_page_wireframe(
         c.setFillColor(colors.black)
         return
 
-    # Build one _EdgeLabelSpec per edge across every panel so the shared
-    # placement engine can avoid cross-panel collisions (the old loop
-    # placed labels panel-by-panel with no global view, so adjacent
-    # panels' labels would clip each other).
+    # Build one _EdgeLabelSpec per UNIQUE edge across every panel.
+    # Adjacent panels share boundary edges (a ridge appears in both
+    # panels' edge lists with the same endpoints); without dedup the
+    # dimension labels render twice on top of each other and the
+    # collision engine wastes cycles solving for two specs of the same
+    # geometry. Bucketing by direction-invariant endpoint key drops the
+    # second occurrence.
     specs: list[_EdgeLabelSpec] = []
     all_roof_edges_pg: list[tuple[np.ndarray, np.ndarray]] = []
+    seen_edges: set[tuple] = set()
     for boundary, outline_pg in zip(panel_boundaries, outlines_pg):
         centroid_pg = outline_pg.mean(axis=0)
         n = len(outline_pg)
@@ -711,6 +741,10 @@ def _render_page_wireframe(
             edge_len_ft = math.hypot(dx, dy, dz) * M_TO_FT
             if edge_len_ft <= 0.01:
                 continue
+            key = _shared_edge_key(p1_3d, p2_3d)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
             specs.append(_EdgeLabelSpec(
                 p1_pg, p2_pg, centroid_pg,
                 feet_to_ft_in(edge_len_ft),
@@ -2342,9 +2376,14 @@ def _render_page4(
     fallback_slope = _slope_numerator(roof.get("primary_slope", "4/12")) or 4
 
     # Draw panel outlines + slope markers first so labels render on top.
+    # Same dedup approach as the dimensioned wireframe: shared boundary
+    # edges (ridges, hips, valleys, transitions) appear in both adjacent
+    # panels' edge lists, so we'd render "(RC)-30'-0\"" twice on top of
+    # itself without bucketing.
     specs: list[_EdgeLabelSpec] = []
     obstacle_aabbs: list[tuple[float, float, float, float]] = []
     all_roof_edges_pg: list[tuple[np.ndarray, np.ndarray]] = []
+    seen_edges: set[tuple] = set()
     for panel in panels:
         boundary = np.asarray(panel.get("boundary_3d", []), dtype=float)
         if boundary.shape[0] < 3:
@@ -2363,6 +2402,12 @@ def _render_page4(
         for i, edge in enumerate(edges[:n]):
             p1 = outline_pg[i]
             p2 = outline_pg[(i + 1) % n]
+            p1_3d = boundary[i]
+            p2_3d = boundary[(i + 1) % n]
+            key = _shared_edge_key(p1_3d, p2_3d)
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
             code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
             length_ft = float(edge.get("length_ft", 0.0))
             text = f"({code})-{feet_to_ft_in(length_ft)}"
