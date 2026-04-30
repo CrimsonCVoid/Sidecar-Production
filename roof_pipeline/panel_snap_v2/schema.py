@@ -16,10 +16,19 @@ log = logging.getLogger(__name__)
 class PanelCorners(BaseModel):
     """One panel's click data: integer ID and list of [col_px, row_px] corners."""
 
-    model_config = ConfigDict(strict=True, extra="forbid")
+    # extra="forbid" was rejecting the optional edge_types array the
+    # frontend sends per panel. Switched to "ignore" so additional
+    # fields the labeler tacks on (edge_types, future per-panel
+    # metadata) don't 422 the whole pipeline run.
+    model_config = ConfigDict(strict=True, extra="ignore")
 
     id: int
     corners_pix: list[list[float]]
+    # Frontend EdgeType strings, lowercase, length == len(corners_pix).
+    # Threaded through to roof_dict_from_pipeline by run_real.py so the
+    # shop-drawing PDF uses the user's labels instead of the geometric
+    # classifier. Optional and ignored when not present.
+    edge_types: list[str] | None = None
 
     @field_validator("corners_pix")
     @classmethod
@@ -55,7 +64,9 @@ class PanelCorners(BaseModel):
 
 
 class PanelsInput(BaseModel):
-    model_config = ConfigDict(strict=True, extra='forbid')
+    # Same rationale as PanelCorners: tolerate forward-compatible
+    # extras instead of 422'ing the whole pipeline run.
+    model_config = ConfigDict(strict=True, extra='ignore')
 
     panels: list[PanelCorners]
     res_m: float | None = None
