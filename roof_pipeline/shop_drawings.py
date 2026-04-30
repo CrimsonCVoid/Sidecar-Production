@@ -2915,8 +2915,17 @@ def roof_dict_from_pipeline(
     One labeled polygon -> one ``roof_section``. Edge types are classified
     geometrically (eave / ridge / hip / gable) using elevation + adjacency.
     Length values are converted from meters (pipeline) to feet (drawing).
+
+    If ``project_meta['user_edge_types']`` is provided as ``dict[int,
+    list[str]]`` (one EDGE_CODE-style label per polygon edge), the user's
+    labels override the geometric classifier per-edge. Empty strings fall
+    back to the geometric inference for that one edge — handy when the
+    user only labeled some of a panel's edges.
     """
     M_TO_FT = 3.280839895
+    user_edge_types: dict[int, list[str]] = (
+        project_meta.get("user_edge_types") or {}
+    )
 
     # Z-range across the entire roof, used by the eave/ridge classifier
     all_z = np.concatenate([poly[:, 2] for poly in polygons.values()])
@@ -2940,6 +2949,17 @@ def roof_dict_from_pipeline(
         plane = planes[pid]
         others = [polygons[other] for other in panel_ids if other != pid]
         types = _classify_panel_edges(poly, others, z_min, z_max)
+
+        # User-supplied labels from the labeler override the geometric
+        # classifier per-edge. Empty / missing entries fall back to the
+        # inferred type so a partially-labeled panel still gets a sane
+        # PDF. The expected length is the polygon vertex count
+        # (corners_pix.length on the frontend = poly.shape[0] here).
+        user_types = user_edge_types.get(pid)
+        if user_types and len(user_types) == poly.shape[0]:
+            for i, ut in enumerate(user_types):
+                if ut:
+                    types[i] = ut
 
         # Drop degenerate edges (corner-snap can collapse two clicks into
         # one position). Keep boundary vertices and edge labels in lockstep:

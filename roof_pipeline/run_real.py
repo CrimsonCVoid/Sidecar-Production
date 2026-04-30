@@ -130,9 +130,58 @@ def run_pipeline(
     planes = fit_all_panels(dsm, mask, res_m)
 
     # Prefer the click-coords path -- exactly N vertices, straight edges.
+    user_edge_types: dict[int, list[str]] = {}
     if panels_json_path is not None and panels_json_path.exists() and not no_clicks:
         log.info("=== boundaries from clicks (%s) ===", panels_json_path.name)
         polygons = polygons_from_clicks(panels_json_path, dsm, res_m, planes)
+
+        # Read user-supplied edge_types out of the same JSON so the shop
+        # drawings can prefer the labeler's edge labels over the
+        # geometric classifier in roof_dict_from_pipeline. Frontend uses
+        # lowercase ("eave", "rake", "ridge", ...); shop_drawings'
+        # EDGE_CODE map keys are uppercase ("EAVE", "GABLE", "RIDGE", ...)
+        # so we normalize + remap "rake" -> "GABLE" (the renamed display
+        # label) and "hip_cap" -> "HIP" here.
+        FRONT_TO_SIDECAR = {
+            "eave": "EAVE",
+            "rake": "GABLE",  # frontend renamed Rake → Gable display
+            "ridge": "RIDGE",
+            "hip": "HIP",
+            "hip_cap": "HIP",  # alias kept for backwards compat
+            "valley": "VALLEY",
+            "wall": "SIDEWALL",  # closest match in EDGE_CODE
+            "transition": "TRANSITION",
+            "stucco": "STUCCO",
+            "endwall": "ENDWALL",
+            "chimney_flashing": "CHIMNEY_FLASHING",
+            "high_side": "HIGH_SIDE",
+            "flying_gable": "FLYING_GABLE",
+        }
+        try:
+            with open(panels_json_path) as f:
+                raw = json.load(f)
+            for entry in raw.get("panels", []):
+                pid = int(entry.get("id"))
+                types = entry.get("edge_types") or []
+                if not isinstance(types, list) or not types:
+                    continue
+                mapped: list[str] = []
+                for t in types:
+                    if not isinstance(t, str):
+                        mapped.append("")
+                        continue
+                    key = t.lower().strip()
+                    if key == "unlabeled" or key == "":
+                        mapped.append("")  # falls back to geometric
+                    else:
+                        mapped.append(FRONT_TO_SIDECAR.get(key, key.upper()))
+                user_edge_types[pid] = mapped
+            if user_edge_types:
+                log.info(
+                    "loaded user edge_types for %d panels", len(user_edge_types)
+                )
+        except Exception as exc:
+            log.warning("failed to load edge_types from %s: %s", panels_json_path, exc)
     else:
         log.info("=== boundaries from mask contours (fallback) ===")
         polygons = extract_panel_polygons(mask, dsm, res_m, planes)
@@ -204,6 +253,9 @@ def run_pipeline(
         "estimate_number": estimate_number or "UNKNOWN",
         "project_name": project_name,
         "project_address": project_address,
+        # Threaded through to roof_dict_from_pipeline, which prefers
+        # these labels over its geometric classifier when present.
+        "user_edge_types": user_edge_types or None,
     }
     # Decode RGB ortho if provided. Used by _render_page_3d_views to
     # show the actual Google Solar imagery as the TOP cell and to
