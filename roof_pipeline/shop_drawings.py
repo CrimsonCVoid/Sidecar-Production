@@ -360,24 +360,26 @@ def _shared_edge_key(
     p1: list[float] | np.ndarray,
     p2: list[float] | np.ndarray,
     *,
-    precision: float = 0.03,  # meters; ~1.2" — survives sub-inch snap drift
+    precision: float = 0.05,  # meters; ~2" — XY tolerance for snap drift
 ) -> tuple:
     """Direction-invariant bucket for an edge endpoint pair.
 
-    Used to dedupe shared edges across panels: a ridge between two
-    slopes is in BOTH panels' edge lists with identical endpoints, so
-    bucketing produces the same key for both sides and we can render
-    or count it exactly once.
+    XY-ONLY by design. Two adjacent panels share corner pixels in the
+    labeler, so their shared corners have identical XY (col*res_m,
+    -row*res_m). But each panel's vertices get projected onto its OWN
+    fitted plane, so Z differs by a few cm of fitting noise at every
+    shared corner — including a Z component in the bucket key splits
+    "the same" edge into different buckets and the dedup misses.
+    Dropping Z fixes that without affecting non-shared edges (eaves,
+    gables) which never collide because their XYs differ.
     """
     a = (
         int(round(float(p1[0]) / precision)),
         int(round(float(p1[1]) / precision)),
-        int(round(float(p1[2]) / precision)) if len(p1) > 2 else 0,
     )
     b = (
         int(round(float(p2[0]) / precision)),
         int(round(float(p2[1]) / precision)),
-        int(round(float(p2[2]) / precision)) if len(p2) > 2 else 0,
     )
     return (min(a, b), max(a, b))
 
@@ -397,15 +399,10 @@ def sum_edges_by_type(roof: dict) -> dict[str, float]:
     pair lands on the same key even when SVG/snap-v2 introduced
     sub-inch drift.
     """
-    BUCKET_PRECISION = 0.1  # ft
-
-    def _bucket(p: list[float]) -> tuple[int, int, int]:
-        return (
-            int(round(p[0] / BUCKET_PRECISION)),
-            int(round(p[1] / BUCKET_PRECISION)),
-            int(round(p[2] / BUCKET_PRECISION)),
-        )
-
+    # Endpoint coords on edge dicts are in METERS (set by
+    # roof_dict_from_pipeline before the M_TO_FT conversion is applied
+    # to length_ft). Use the shared XY-only helper so trim takeoff
+    # dedup matches the wireframe + combined-view dedup exactly.
     totals: dict[str, float] = {}
     seen: set[tuple] = set()
     for panel in roof.get("roof_panels", []):
@@ -419,9 +416,7 @@ def sum_edges_by_type(roof: dict) -> dict[str, float]:
                 code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
                 totals[code] = totals.get(code, 0.0) + float(edge.get("length_ft", 0.0))
                 continue
-            b1, b2 = _bucket(p1), _bucket(p2)
-            # Direction-invariant key: smaller endpoint first.
-            key = (min(b1, b2), max(b1, b2))
+            key = _shared_edge_key(p1, p2)
             if key in seen:
                 continue
             seen.add(key)
