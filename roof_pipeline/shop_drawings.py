@@ -357,10 +357,48 @@ def _panel_outline_2d(panel: dict) -> np.ndarray:
 
 
 def sum_edges_by_type(roof: dict) -> dict[str, float]:
-    """LF totals per edge type CODE, summed across every panel."""
+    """LF totals per edge type CODE, deduplicating shared edges.
+
+    Adjacent panels share boundary edges (a ridge between two slopes is
+    in BOTH panels' edge lists; same for hips and valleys). Naive sum
+    double-counts every shared edge — a 30 ft ridge between two panels
+    would show up as 60 ft of ridge cap. Fix: bucket each edge by an
+    endpoint-pair key that's invariant to direction, and only count
+    each unique bucket once.
+
+    Endpoint coords are 3D in feet (the upstream conversion already ran
+    M_TO_FT). We round to 0.1 ft (~1.2") so two panels' shared corner
+    pair lands on the same key even when SVG/snap-v2 introduced
+    sub-inch drift.
+    """
+    BUCKET_PRECISION = 0.1  # ft
+
+    def _bucket(p: list[float]) -> tuple[int, int, int]:
+        return (
+            int(round(p[0] / BUCKET_PRECISION)),
+            int(round(p[1] / BUCKET_PRECISION)),
+            int(round(p[2] / BUCKET_PRECISION)),
+        )
+
     totals: dict[str, float] = {}
+    seen: set[tuple] = set()
     for panel in roof.get("roof_panels", []):
         for edge in panel.get("edges", []):
+            p1 = edge.get("p1")
+            p2 = edge.get("p2")
+            if not (isinstance(p1, list) and isinstance(p2, list)):
+                # Older roof_dict shape without endpoint coords — fall
+                # back to per-panel sum (may double-count). Better than
+                # silently dropping the edge.
+                code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
+                totals[code] = totals.get(code, 0.0) + float(edge.get("length_ft", 0.0))
+                continue
+            b1, b2 = _bucket(p1), _bucket(p2)
+            # Direction-invariant key: smaller endpoint first.
+            key = (min(b1, b2), max(b1, b2))
+            if key in seen:
+                continue
+            seen.add(key)
             code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
             totals[code] = totals.get(code, 0.0) + float(edge.get("length_ft", 0.0))
     return totals
