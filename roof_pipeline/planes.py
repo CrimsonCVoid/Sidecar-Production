@@ -1,4 +1,12 @@
-"""Per-panel plane fitting via SVD (no RANSAC -- mask already constrains region)."""
+"""Per-panel plane fitting via SVD with optional RANSAC outer loop.
+
+DSM is a Digital *Surface* Model — it includes vegetation. When a labeler's
+polygon clips a tree at a corner, mask pixels under the canopy report
+canopy height instead of roof height, and a least-squares SVD fit gets
+pulled toward those outliers. RANSAC over the same mask pixels lets the
+roof majority outvote the canopy minority, so the fitted plane stays on
+the roof. Plain SVD remains the inner fitter and the small-N fallback.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +22,7 @@ log = logging.getLogger(__name__)
 class Plane:
     normal: np.ndarray       # (3,) unit normal, oriented n_z >= 0
     centroid: np.ndarray     # (3,) point on the plane (mean of input points)
-    rms_residual: float      # RMS of orthogonal distances from points to plane
+    rms_residual: float      # RMS of orthogonal distances from inliers to plane
     d: float                 # plane offset so n . x = d for any x on the plane
 
 
@@ -49,10 +57,68 @@ def fit_plane(points_xyz: np.ndarray) -> Plane:
     return Plane(normal=normal, centroid=centroid, rms_residual=rms, d=d)
 
 
+def fit_plane_ransac(
+    points_xyz: np.ndarray,
+    dist_threshold: float = 0.15,
+    max_iters: int = 100,
+    min_inlier_frac: float = 0.5,
+    seed: int = 0,
+) -> Plane:
+    """Robust plane fit. Returns SVD over the largest inlier consensus set.
+
+    Falls back to plain `fit_plane(points_xyz)` if the inputs are too small
+    for sampling to make sense, or if no candidate plane reaches
+    ``min_inlier_frac`` of the points within ``dist_threshold``.
+
+    `dist_threshold` defaults to 0.15 m, matching the default snap tolerance
+    in main.py — the same scale at which we already consider edges "shared."
+    """
+    if points_xyz.ndim != 2 or points_xyz.shape[1] != 3:
+        raise ValueError(f"need (N, 3) points, got {points_xyz.shape}")
+
+    n = points_xyz.shape[0]
+    if n < 12:
+        # Too few points for a meaningful consensus loop. Just do plain SVD.
+        return fit_plane(points_xyz)
+
+    rng = np.random.default_rng(seed)
+    best_inliers: np.ndarray | None = None
+    best_count = 0
+
+    for _ in range(max_iters):
+        idx = rng.choice(n, size=3, replace=False)
+        sample = points_xyz[idx]
+        v1 = sample[1] - sample[0]
+        v2 = sample[2] - sample[0]
+        normal = np.cross(v1, v2)
+        norm = np.linalg.norm(normal)
+        if norm < 1e-9:
+            # Collinear sample — skip
+            continue
+        normal = normal / norm
+        d = float(normal @ sample[0])
+        residuals = np.abs(points_xyz @ normal - d)
+        inliers = residuals < dist_threshold
+        count = int(inliers.sum())
+        if count > best_count:
+            best_count = count
+            best_inliers = inliers
+
+    if best_inliers is None or best_count < max(3, int(min_inlier_frac * n)):
+        # No good consensus — fall back to plain SVD over everything.
+        log.info("ransac: no consensus (best %d/%d), falling back to SVD",
+                 best_count, n)
+        return fit_plane(points_xyz)
+
+    # Refit with all inliers via SVD (more accurate than the 3-point sample).
+    return fit_plane(points_xyz[best_inliers])
+
+
 def fit_all_panels(
     dsm: np.ndarray,
     mask: np.ndarray,
     res_m: float,
+    use_ransac: bool = True,
 ) -> dict[int, Plane]:
     """Fit one plane per nonzero panel ID in the mask.
 
@@ -85,7 +151,7 @@ def fit_all_panels(
         x = cols * res_m
         y = -rows * res_m
         pts = np.stack([x, y, z], axis=1).astype(np.float64)
-        plane = fit_plane(pts)
+        plane = fit_plane_ransac(pts) if use_ransac else fit_plane(pts)
         planes[pid] = plane
         log.info(
             "panel %d: %d pts, normal=(%.3f, %.3f, %.3f), residual_rms=%.4f m",

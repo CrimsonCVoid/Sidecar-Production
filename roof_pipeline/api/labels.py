@@ -4,7 +4,7 @@ Uses the training_labels table with schema:
   - id (uuid, auto)
   - sample_id (uuid, FK to training_samples)
   - labeled_by (uuid, nullable)
-  - annotations (jsonb -- the panel click data)
+  - annotations (jsonb -- the panel click data + cached flagged_corners)
   - status (text: complete|skipped|flagged|in_progress)
   - duration_ms (int, nullable)
   - notes (text, nullable)
@@ -13,39 +13,167 @@ Uses the training_labels table with schema:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import Client
 
-from .deps import Principal, get_supabase, require_principal, verify_sample_access
-from .schemas import LabelData
+from ..boundaries import robust_dsm_sample
+from ..planes import fit_plane_ransac
+from .config import Settings
+from .deps import Principal, get_settings, get_supabase, require_principal, verify_sample_access
+from .hillshade import load_dsm
+from .schemas import FlaggedCorner, LabelData, SaveLabelsResponse
 
 log = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.post("/{sample_id}")
+def _check_panel_corners(
+    panels: list[dict],
+    dsm: np.ndarray,
+    res_m: float,
+    *,
+    abs_threshold_m: float = 0.5,
+    mad_k: float = 3.0,
+) -> list[FlaggedCorner]:
+    """Per-panel: rasterize, RANSAC plane-fit, flag corners with high residual.
+
+    A corner is flagged when it sits more than ``abs_threshold_m`` AND more
+    than ``mad_k * MAD`` off the panel's robust plane. The MAD floor catches
+    the easy cases (corner in a tree); the absolute floor avoids false
+    positives on a panel that happens to be very flat (tiny MAD inflates
+    the relative threshold).
+    """
+    import cv2
+
+    h, w = dsm.shape
+    flagged: list[FlaggedCorner] = []
+
+    for panel in panels:
+        pid = int(panel.get("id", 0))
+        corners = panel.get("corners_pix") or []
+        if len(corners) < 3:
+            continue
+        corners_arr = np.asarray(corners, dtype=np.float64)
+        cols = corners_arr[:, 0]
+        rows = corners_arr[:, 1]
+
+        # Rasterize this single panel into a binary mask, then sample DSM
+        # over those pixels for the plane fit. Uses the same fillPoly
+        # pattern as api/pipeline.py.
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [corners_arr.astype(np.int32)], 1)
+        rs, cs = np.where(mask == 1)
+        if rs.size < 12:
+            continue
+        zs = dsm[rs, cs]
+        good = ~np.isnan(zs)
+        if good.sum() < 12:
+            continue
+        rs, cs, zs = rs[good], cs[good], zs[good]
+        pts = np.stack([cs * res_m, -rs * res_m, zs], axis=1).astype(np.float64)
+        try:
+            plane = fit_plane_ransac(pts)
+        except ValueError:
+            continue
+
+        # Sample DSM at each clicked corner with the canopy-aware sampler,
+        # then compare to the plane prediction at that XY.
+        z_samples = robust_dsm_sample(dsm, cols, rows)
+        nx, ny, nz = plane.normal
+        if abs(nz) < 1e-9:
+            continue
+        xs_m = cols * res_m
+        ys_m = -rows * res_m
+        z_plane = (plane.d - nx * xs_m - ny * ys_m) / nz
+        residuals = z_samples - z_plane
+        abs_residuals = np.abs(residuals)
+        mad = float(np.median(np.abs(abs_residuals - np.median(abs_residuals))))
+        rel_threshold = mad_k * (mad if mad > 1e-6 else abs_threshold_m)
+        threshold = max(abs_threshold_m, rel_threshold)
+
+        for idx, r_signed in enumerate(residuals):
+            if abs(r_signed) <= threshold:
+                continue
+            reason = "canopy" if r_signed > 0 else "plane_outlier"
+            flagged.append(FlaggedCorner(
+                panel_id=pid,
+                corner_idx=idx,
+                residual_m=float(abs(r_signed)),
+                reason=reason,
+            ))
+
+    return flagged
+
+
+def _validate_corners_best_effort(
+    sample_id: str,
+    panels: list[dict],
+    supabase: Client,
+    settings: Settings,
+) -> list[FlaggedCorner]:
+    """Run the corner-height check; swallow failures and return [] on error.
+
+    Reasons the check might fail: DSM not yet uploaded, sample row missing,
+    storage hiccup, OpenCV not installed in this image. The save itself has
+    already succeeded by the time this runs, so a failure here just means
+    the UI doesn't get flag highlights — never that labels are lost.
+    """
+    try:
+        result = (
+            supabase.table("training_samples")
+            .select("meters_per_px")
+            .eq("id", sample_id)
+            .execute()
+        )
+        row = result.data[0] if result.data else {}
+        res_m = float(row.get("meters_per_px") or 0.1)
+        dsm = load_dsm(supabase, settings, sample_id)
+        return _check_panel_corners(panels, dsm, res_m)
+    except Exception as exc:
+        log.warning("corner check skipped for %s: %s", sample_id, exc)
+        return []
+
+
+@router.post("/{sample_id}", response_model=SaveLabelsResponse)
 async def save_labels(
     sample_id: str,
     body: LabelData,
     request: Request,
     supabase: Client = Depends(get_supabase),
+    settings: Settings = Depends(get_settings),
     principal: Principal = Depends(require_principal),
 ):
     """Persist panel label data for a sample (API-03).
 
-    Upserts into training_labels: stores panels as annotations jsonb.
+    Upserts into training_labels and returns any DSM-flagged corners so the
+    labeling UI can surface them for review.
     """
     request.state.sample_id = sample_id
     verify_sample_access(principal, sample_id, supabase)
 
+    # Run the DSM corner-height check off the event loop. Best-effort:
+    # never fails the save. If it returns flags on >=2 corners of any
+    # panel, we mark status="flagged" so the dashboard can surface the
+    # row; otherwise status stays "complete".
+    flagged = await asyncio.to_thread(
+        _validate_corners_best_effort, sample_id, body.panels, supabase, settings
+    )
+    flag_dump = [f.model_dump() for f in flagged]
+    counts: dict[int, int] = {}
+    for f in flagged:
+        counts[f.panel_id] = counts.get(f.panel_id, 0) + 1
+    has_panel_with_two_plus = any(c >= 2 for c in counts.values())
+    status_value = "flagged" if has_panel_with_two_plus else "complete"
+
     now = datetime.now(timezone.utc).isoformat()
 
     try:
-        # Check if a label row already exists for this sample
         existing = (
             supabase.table("training_labels")
             .select("id")
@@ -53,19 +181,22 @@ async def save_labels(
             .execute()
         )
 
+        annotations_payload = {
+            "panels": body.panels,
+            "flagged_corners": flag_dump,
+        }
+
         if existing.data:
-            # Update existing row
             supabase.table("training_labels").update({
-                "annotations": {"panels": body.panels},
-                "status": "complete",
+                "annotations": annotations_payload,
+                "status": status_value,
                 "updated_at": now,
             }).eq("sample_id", sample_id).execute()
         else:
-            # Insert new row
             supabase.table("training_labels").insert({
                 "sample_id": sample_id,
-                "annotations": {"panels": body.panels},
-                "status": "complete",
+                "annotations": annotations_payload,
+                "status": status_value,
             }).execute()
 
     except Exception as exc:
@@ -75,8 +206,16 @@ async def save_labels(
             detail=f"Failed to save labels: {exc}",
         ) from exc
 
-    log.info("saved labels for sample %s (%d panels)", sample_id, len(body.panels))
-    return {"status": "saved", "sample_id": sample_id, "panel_count": len(body.panels)}
+    log.info(
+        "saved labels for sample %s (%d panels, %d flagged corners, status=%s)",
+        sample_id, len(body.panels), len(flagged), status_value,
+    )
+    return SaveLabelsResponse(
+        status="saved",
+        sample_id=sample_id,
+        panel_count=len(body.panels),
+        flagged_corners=flagged,
+    )
 
 
 @router.get("/{sample_id}")
@@ -109,7 +248,15 @@ async def get_labels(
     row = result.data[0]
     annotations = row.get("annotations") or {}
     panels = annotations.get("panels", [])
+    cached_flags = annotations.get("flagged_corners") or []
+    flagged_models: list[FlaggedCorner] = []
+    for f in cached_flags:
+        try:
+            flagged_models.append(FlaggedCorner.model_validate(f))
+        except Exception:
+            continue
     return LabelData(
         sample_id=row["sample_id"],
         panels=panels,
+        flagged_corners=flagged_models,
     )

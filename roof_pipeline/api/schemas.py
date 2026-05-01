@@ -80,11 +80,36 @@ class PipelineRunStatus(BaseModel):
 # Labels (API-03, D-07 stub)
 # ---------------------------------------------------------------------------
 
+class FlaggedCorner(BaseModel):
+    """One panel corner whose Z is suspect after DSM-aware checks.
+
+    DSMs include vegetation; a corner that lands on a tree reads canopy
+    height, which throws off downstream cut sheets. We surface these so
+    the labeling UI can highlight them for review. Not an error — the
+    save still succeeds.
+    """
+
+    panel_id: int
+    corner_idx: int
+    residual_m: float
+    reason: str  # "canopy" | "plane_outlier"
+
+
 class LabelData(BaseModel):
     """Panel label data for POST/GET /labels/{sampleId} (API-03, D-07 stub)."""
 
     sample_id: str
     panels: list[dict]  # Schema TBD per D-07, Phase 5 owns
+    flagged_corners: list[FlaggedCorner] = []
+
+
+class SaveLabelsResponse(BaseModel):
+    """Response from POST /labels/{sampleId}."""
+
+    status: str
+    sample_id: str
+    panel_count: int
+    flagged_corners: list[FlaggedCorner] = []
 
 
 # ---------------------------------------------------------------------------

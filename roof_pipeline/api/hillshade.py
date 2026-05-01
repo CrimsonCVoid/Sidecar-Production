@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _load_dsm(supabase: Client, settings: Settings, sample_id: str) -> np.ndarray:
+def load_dsm(supabase: Client, settings: Settings, sample_id: str) -> np.ndarray:
     """Look up and download DSM for a sample, return as numpy array."""
     result = (
         supabase.table("training_samples")
@@ -121,7 +121,7 @@ async def get_hillshade(
 ):
     """Render and return a hillshade PNG for a training sample's DSM."""
     verify_sample_access(principal, sample_id, supabase)
-    dsm_arr = _load_dsm(supabase, settings, sample_id)
+    dsm_arr = load_dsm(supabase, settings, sample_id)
     shade = _render_hillshade(dsm_arr)
     png_bytes = _to_png(shade)
     return Response(
@@ -197,7 +197,7 @@ async def get_heatmap(
 ):
     """Render and return a DSM elevation heatmap PNG (inferno colormap, RGBA)."""
     verify_sample_access(principal, sample_id, supabase)
-    dsm_arr = _load_dsm(supabase, settings, sample_id)
+    dsm_arr = load_dsm(supabase, settings, sample_id)
     heatmap = _render_heatmap(dsm_arr)
     png_bytes = _to_png(heatmap)
     return Response(
