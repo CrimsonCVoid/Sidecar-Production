@@ -29,13 +29,65 @@ from pathlib import Path
 LOG = logging.getLogger("msgp.train")
 
 
-def _build_loaders(data_dir: Path, batch_size: int):
-    # Stub — real loader builds (RGB+DSM, mask) pairs.
-    # Returns (train_loader, val_loader). Implement once we wire data.
-    raise NotImplementedError(
-        "Data loader stub. Implement after wiring training_labels -> mask "
-        "assembly per the README. WHU public dataset can warm-start without "
-        "any private-data dependency."
+def _build_loaders(data_dir: Path, batch_size: int, val_split: float = 0.1):
+    """Build train + val DataLoaders over the .input.npy / .mask.npy
+    pairs produced by scripts/msgp_prepare_data.py.
+
+    Layout:
+        <data_dir>/<stem>.input.npy   (4, H, W) float32 — RGB[0..1] + norm DSM
+        <data_dir>/<stem>.mask.npy    (H, W)    uint8   — binary mask
+
+    Deterministic 90/10 split by sample stem hash so the same split
+    survives across runs without an explicit manifest file. Override
+    by partitioning <data_dir>/train and <data_dir>/val yourself.
+    """
+    import hashlib
+
+    import numpy as np
+    import torch
+    from torch.utils.data import DataLoader, Dataset
+
+    class _NpyPairDataset(Dataset):
+        def __init__(self, paths):
+            self.paths = list(paths)
+
+        def __len__(self):
+            return len(self.paths)
+
+        def __getitem__(self, idx):
+            p = self.paths[idx]
+            inp = np.load(p).astype("float32")
+            mask = np.load(str(p).replace(".input.npy", ".mask.npy"))
+            if mask.ndim == 2:
+                mask = mask[None]  # add channel dim
+            return torch.from_numpy(inp), torch.from_numpy(mask).float()
+
+    train_dir = data_dir / "train"
+    val_dir = data_dir / "val"
+    if train_dir.exists() and val_dir.exists():
+        train_paths = sorted(train_dir.glob("*.input.npy"))
+        val_paths = sorted(val_dir.glob("*.input.npy"))
+    else:
+        # Hash-based split for cohorts without an explicit manifest.
+        all_paths = sorted(data_dir.glob("*.input.npy"))
+        if not all_paths:
+            raise FileNotFoundError(
+                f"No *.input.npy files under {data_dir}. Did you run "
+                f"scripts/msgp_prepare_data.py?"
+            )
+        train_paths, val_paths = [], []
+        for p in all_paths:
+            digest = int(hashlib.md5(p.stem.encode()).hexdigest(), 16) % 1000
+            (val_paths if digest < val_split * 1000 else train_paths).append(p)
+
+    LOG.info(
+        "msgp data: %d train + %d val", len(train_paths), len(val_paths)
+    )
+    train_ds = _NpyPairDataset(train_paths)
+    val_ds = _NpyPairDataset(val_paths)
+    return (
+        DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2),
+        DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2),
     )
 
 
