@@ -1,0 +1,80 @@
+# =============================================================================
+# /etc/systemd/system/mmr-sam.service — SAM auto-panel service (uvicorn)
+# =============================================================================
+# Phase 2 of the pipeline upgrade. SEPARATE from mmr-api.service; runs on
+# a GPU host (Thunder Compute A100 in prod), owns its own venv, never
+# shares a process with the existing FastAPI sidecar.
+#
+# Manual install on the GPU host:
+#   sudo cp roof_pipeline/sam_service/systemd/mmr-sam.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mmr-sam
+#
+# Operations:
+#   sudo systemctl status mmr-sam       # current state
+#   sudo systemctl restart mmr-sam      # apply code/.env changes
+#   sudo journalctl -u mmr-sam -f       # tail logs
+#   sudo journalctl -u mmr-sam -n 200   # last 200 lines
+#
+# Layout assumed by this unit (matches deploy/README.md):
+#   /opt/mmr-sam/app           : git working copy of the sidecar repo
+#   /opt/mmr-sam/venv          : python venv with requirements-sam.txt
+#   /opt/mmr-sam/weights       : SAM checkpoints (~2.4 GB for vit_h)
+#   /opt/mmr-sam/app/.env      : SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+#                                INTERNAL_API_KEY, SAM_CHECKPOINT_PATH
+# =============================================================================
+
+[Unit]
+Description=MMR SAM auto-panel service (roof_pipeline.sam_service.main:app)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=mmr
+Group=mmr
+WorkingDirectory=/opt/mmr-sam/app
+
+# .env is read by os.environ at app start (the SAM service uses plain os
+# env, not pydantic-settings — fewer moving parts). Permissions enforced
+# to 0600 by the deploy script.
+EnvironmentFile=/opt/mmr-sam/app/.env
+
+# Bind to 0.0.0.0 because the web v2 proxy lives on a different host
+# (Vercel). INTERNAL_API_KEY is the gate. Recommended setup is to put
+# Caddy in front for TLS termination (see deploy/sam README) and firewall
+# port 8001 to localhost only — but bare-metal works for an MVP with a
+# rotating internal key.
+ExecStart=/opt/mmr-sam/venv/bin/uvicorn roof_pipeline.sam_service.main:app \
+    --host 0.0.0.0 \
+    --port 8001 \
+    --workers 1 \
+    --proxy-headers \
+    --log-level info
+
+# NEVER STOP RUNNING — same posture as mmr-api: no rate-limit on
+# restarts, always come back up.
+Restart=always
+RestartSec=3
+StartLimitIntervalSec=0
+
+# Hardening — relaxed vs mmr-api so the worker can talk to the GPU.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/mmr-sam/app /opt/mmr-sam/weights /tmp /dev/shm
+# Do NOT set ProtectKernelModules / RestrictNamespaces too aggressively
+# here — CUDA's userspace driver opens /dev/nvidia* and needs ioctl
+# access. The default systemd posture is fine.
+
+# Memory — SAM ViT-H is ~24GB GPU resident, ~3GB host RAM at inference.
+# We're not capping host RAM because the GPU is the binding resource.
+
+# stdout/stderr -> journald (use `journalctl -u mmr-sam`)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mmr-sam
+
+[Install]
+WantedBy=multi-user.target

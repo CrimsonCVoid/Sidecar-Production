@@ -1,0 +1,25 @@
+# SAM service deps. Install on the GPU host's mmr-sam venv ONLY — these
+# are heavy and unnecessary on the existing mmr-api droplet.
+#
+#   pip install -r roof_pipeline/sam_service/requirements-sam.txt
+#
+# torch is pinned loosely; the Thunder Compute A100 ships with CUDA 12.x
+# so the +cu121 wheels are appropriate. If the host CUDA differs, install
+# torch from https://pytorch.org/get-started/locally/ first, then this
+# file.
+
+# --- core inference stack ---
+torch>=2.1
+torchvision>=0.16
+git+https://github.com/facebookresearch/segment-anything.git
+opencv-python>=4.9
+Pillow>=10.0
+numpy>=1.26
+
+# --- web tier ---
+fastapi>=0.115
+uvicorn[standard]>=0.30
+
+# --- data tier (matches the existing sidecar so telemetry + supabase
+# clients behave identically) ---
+supabase>=2.7
