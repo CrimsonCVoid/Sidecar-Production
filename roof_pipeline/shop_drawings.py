@@ -3020,19 +3020,61 @@ def roof_dict_from_pipeline(
 
     coverage_ft = coverage_width_in / 12.0
 
+    # Phase 4: optional learned edge classifier. Always behind a flag.
+    # Import is local so a missing edge_classifier package or
+    # uninstalled xgboost can't break startup.
+    try:
+        from .edge_classifier import classifier_available, predict_edges
+        _edge_clf_on = classifier_available()
+    except Exception:
+        _edge_clf_on = False
+        predict_edges = None  # type: ignore
+
     panels = []
     panel_ids = sorted(polygons.keys())
     for pid in panel_ids:
         poly = polygons[pid]
         plane = planes[pid]
         others = [polygons[other] for other in panel_ids if other != pid]
+        # Geometric classifier always runs — its output is the per-edge
+        # fallback when the learned classifier is off OR the learned
+        # classifier returns low confidence on a particular edge.
         types = _classify_panel_edges(poly, others, z_min, z_max)
 
+        # Phase 4 inference. predict_edges returns one (label, conf) per
+        # edge; an empty label means "below confidence threshold —
+        # caller should fall back to the rule for THIS edge only" per
+        # the spec. Hard-fail safe: if the classifier raises or returns
+        # None, we keep using the rule-derived `types`.
+        if _edge_clf_on and predict_edges is not None:
+            try:
+                clf_predictions = predict_edges(
+                    pid, poly, plane, polygons, planes,
+                )
+            except Exception as exc:
+                log.warning("edge_classifier crashed on panel %d: %s", pid, exc)
+                clf_predictions = None
+            if clf_predictions and len(clf_predictions) == poly.shape[0]:
+                for i, (label, _conf) in enumerate(clf_predictions):
+                    if label:
+                        # Convert lowercase label to uppercase EDGE_CODE
+                        # key (eave -> EAVE, hip_cap -> HIP, etc).
+                        # rake -> GABLE per the recent display rename.
+                        mapping = {
+                            "eave": "EAVE",
+                            "rake": "GABLE",
+                            "ridge": "RIDGE",
+                            "hip": "HIP",
+                            "hip_cap": "HIP",
+                            "valley": "VALLEY",
+                            "wall": "SIDEWALL",
+                        }
+                        mapped = mapping.get(label.lower(), label.upper())
+                        types[i] = mapped
+
         # User-supplied labels from the labeler override the geometric
-        # classifier per-edge. Empty / missing entries fall back to the
-        # inferred type so a partially-labeled panel still gets a sane
-        # PDF. The expected length is the polygon vertex count
-        # (corners_pix.length on the frontend = poly.shape[0] here).
+        # classifier AND the learned classifier per-edge. Empty /
+        # missing entries fall back to whatever was just decided.
         user_types = user_edge_types.get(pid)
         if user_types and len(user_types) == poly.shape[0]:
             for i, ut in enumerate(user_types):
