@@ -2522,6 +2522,284 @@ def _render_page_3d_views(
             pass
 
 
+def _render_orthographic_views_png(
+    panels: list[dict],
+    *,
+    rgb_image: np.ndarray | None = None,
+    rgb_res_m: float | None = None,
+) -> Path | None:
+    """True-orthographic 5-panel composite for the dedicated ortho page.
+
+    Distinct from `_render_5views_png` in three ways:
+      1. The four directional elevations use elev=0 (no perspective
+         tilt). What the contractor sees is what gets measured.
+      2. Each elevation gets explicit overall width + height dimension
+         lines drawn on the figure so the page is usable for spot
+         dimensional checks without flipping back to the wireframe.
+      3. The TOP cell always renders the mesh in plan view, even when
+         RGB is available — the existing 3D-views page already shows
+         the aerial. This page is the geometric-only complement.
+
+    Layout: 2x3 grid.
+        [ TOP plan ][ N elev ][ E elev ]
+        [ TOP plan ][ S elev ][ W elev ]
+    The TOP cell spans both rows of column 0 so it's the dominant
+    visual; elevations slot to the right.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    M_TO_FT = 3.280839895
+
+    tris: list[np.ndarray] = []
+    all_xyz: list[np.ndarray] = []
+    face_colors: list[str] = []
+    have_rgb = rgb_image is not None and rgb_res_m is not None
+
+    for idx, panel in enumerate(panels):
+        b = np.asarray(panel.get("boundary_3d", []), dtype=float)
+        if b.shape[0] < 3:
+            continue
+        tris.append(b)
+        all_xyz.append(b)
+        if have_rgb:
+            try:
+                c_hex = _sample_panel_color(b, rgb_image, rgb_res_m)
+            except Exception as e:
+                log.warning(
+                    "RGB sample failed for panel %d (%s) — falling back to palette",
+                    idx, e,
+                )
+                c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
+        else:
+            c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
+        face_colors.append(c_hex)
+    if not tris:
+        return None
+
+    pts = np.vstack(all_xyz)
+    mn = pts.min(axis=0)
+    mx = pts.max(axis=0)
+    span_x_ft = (mx[0] - mn[0]) * M_TO_FT
+    span_y_ft = (mx[1] - mn[1]) * M_TO_FT
+    span_z_ft = (mx[2] - mn[2]) * M_TO_FT
+    cx = 0.5 * (mn[0] + mx[0])
+    cy = 0.5 * (mn[1] + mx[1])
+    cz = 0.5 * (mn[2] + mx[2])
+
+    pad_x = (mx[0] - mn[0]) * 0.06
+    pad_y = (mx[1] - mn[1]) * 0.06
+
+    # Layout (2 rows × 4 columns):
+    #   col 0           col 1           col 2     col 3
+    # [ aerial   ][ 3D plan ][ N elev ][ E elev ]
+    # [ aerial   ][ 3D plan ][ S elev ][ W elev ]
+    # Aerial + 3D-plan each span both rows so they get the dominant
+    # visual weight; elevations slot into the right two columns.
+    fig = plt.figure(figsize=(18, 10), dpi=150)
+    gs = fig.add_gridspec(2, 4, wspace=0.06, hspace=0.10)
+
+    # ---- Cell A (col 0): Google Solar aerial, or mesh fallback ----
+    if have_rgb:
+        ax_aerial = fig.add_subplot(gs[0:2, 0])
+        try:
+            cropped = _crop_rgb_to_roof(rgb_image, pts[:, :2], rgb_res_m)
+            ax_aerial.imshow(cropped)
+            ax_aerial.set_axis_off()
+            ax_aerial.set_title("AERIAL (Google Solar imagery)",
+                                fontsize=11, fontweight="bold")
+        except Exception as e:
+            log.warning("AERIAL imshow failed (%s) — falling back to mesh", e)
+            fig.delaxes(ax_aerial)
+            ax_aerial = fig.add_subplot(gs[0:2, 0], projection="3d")
+            have_rgb = False  # mesh fallback handled below
+    else:
+        ax_aerial = fig.add_subplot(gs[0:2, 0], projection="3d")
+
+    # ---- Cell B (col 1): 3D mesh top-down (pure 2D plan from XY) ----
+    ax_top = fig.add_subplot(gs[0:2, 1])
+    for verts, fc in zip(tris, face_colors):
+        poly_xy = verts[:, :2]
+        ax_top.fill(
+            poly_xy[:, 0], poly_xy[:, 1],
+            facecolor=fc, edgecolor="#222222", linewidth=0.6, alpha=0.96,
+        )
+    ax_top.set_aspect("equal")
+    ax_top.set_xlim(mn[0] - pad_x, mx[0] + pad_x)
+    ax_top.set_ylim(mn[1] - pad_y, mx[1] + pad_y)
+    ax_top.set_axis_off()
+    ax_top.set_title(
+        f"TOP (3D plan)  —  {span_x_ft:.1f}' × {span_y_ft:.1f}'",
+        fontsize=11, fontweight="bold",
+    )
+    # Compass arrow so contractors can orient the 3D plan against the
+    # aerial. North = +Y world axis.
+    ax_top.annotate(
+        "N",
+        xy=(mx[0] + pad_x * 0.4, mx[1]),
+        xytext=(mx[0] + pad_x * 0.4, mx[1] - (mx[1] - mn[1]) * 0.10),
+        ha="center", va="bottom",
+        fontsize=10, fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color="#444"),
+    )
+
+    # ---- Cells C-F (cols 2,3): four orthographic elevations ----
+    # azim picks which direction we look FROM:
+    #   N elev (looking south) -> azim = -90
+    #   S elev (looking north) -> azim =  90
+    #   E elev (looking west)  -> azim = 180
+    #   W elev (looking east)  -> azim =   0
+    ax_n = fig.add_subplot(gs[0, 2], projection="3d")
+    ax_e = fig.add_subplot(gs[0, 3], projection="3d")
+    ax_s = fig.add_subplot(gs[1, 2], projection="3d")
+    ax_w = fig.add_subplot(gs[1, 3], projection="3d")
+
+    def populate_elev(ax, azim: float, title: str, span_lateral_ft: float) -> None:
+        for verts, fc in zip(tris, face_colors):
+            pc = Poly3DCollection(
+                [verts], facecolor=fc, edgecolor="#222", linewidth=0.4, alpha=0.97,
+            )
+            ax.add_collection3d(pc)
+        hx = 0.5 * (mx[0] - mn[0]) * 1.10
+        hy = 0.5 * (mx[1] - mn[1]) * 1.10
+        hz = 0.5 * (mx[2] - mn[2]) * 1.40  # mild z-exaggeration so
+        # low-slope roofs aren't a flat line at this scale.
+        ax.set_xlim(cx - hx, cx + hx)
+        ax.set_ylim(cy - hy, cy + hy)
+        ax.set_zlim(cz - hz, cz + hz)
+        try:
+            ax.set_box_aspect((hx, hy, hz))
+        except Exception:
+            pass
+        try:
+            ax.set_proj_type("ortho")
+        except Exception:
+            pass
+        ax.set_axis_off()
+        ax.view_init(elev=0.0, azim=azim)
+        ax.set_title(
+            f"{title}  —  {span_lateral_ft:.1f}' wide × {span_z_ft:.1f}' tall",
+            fontsize=10, fontweight="bold",
+        )
+
+    # If RGB wasn't available, paint the aerial cell with a mesh
+    # top-down so the page still has all six cells.
+    if not have_rgb:
+        for verts, fc in zip(tris, face_colors):
+            pc = Poly3DCollection(
+                [verts], facecolor=fc, edgecolor="#222",
+                linewidth=0.5, alpha=0.97,
+            )
+            ax_aerial.add_collection3d(pc)
+        hx = 0.5 * (mx[0] - mn[0]) * 1.05
+        hy = 0.5 * (mx[1] - mn[1]) * 1.05
+        hz = 0.5 * (mx[2] - mn[2]) * 1.05
+        ax_aerial.set_xlim(cx - hx, cx + hx)
+        ax_aerial.set_ylim(cy - hy, cy + hy)
+        ax_aerial.set_zlim(cz - hz, cz + hz)
+        try:
+            ax_aerial.set_box_aspect((hx, hy, hz))
+        except Exception:
+            pass
+        try:
+            ax_aerial.set_proj_type("ortho")
+        except Exception:
+            pass
+        ax_aerial.set_axis_off()
+        ax_aerial.view_init(elev=90.0, azim=-90.0)
+        ax_aerial.set_title(
+            "AERIAL (mesh fallback — no Solar imagery)",
+            fontsize=11, fontweight="bold",
+        )
+
+    populate_elev(ax_n, azim=-90.0, title="N elevation", span_lateral_ft=span_x_ft)
+    populate_elev(ax_s, azim=90.0,  title="S elevation", span_lateral_ft=span_x_ft)
+    populate_elev(ax_e, azim=0.0,   title="E elevation", span_lateral_ft=span_y_ft)
+    populate_elev(ax_w, azim=180.0, title="W elevation", span_lateral_ft=span_y_ft)
+
+    fd, tmp = tempfile.mkstemp(suffix=".png")
+    import os
+    os.close(fd)
+    out = Path(tmp)
+    fig.savefig(out, bbox_inches="tight", pad_inches=0.1, facecolor="white")
+    plt.close(fig)
+    return out
+
+
+def _render_page_orthographic_views(
+    c: pdfcanvas.Canvas, roof: dict,
+    page_num: int, total_pages: int,
+) -> None:
+    """Pure-orthographic 5-cell page: TOP plan + N/S/E/W elevations.
+
+    Companion to `_render_page_3d_views`. The 3D-views page tilts the
+    side cells 20° for surface visibility; this page keeps them at 0°
+    so dimension labels read off the elevation axes directly. Both
+    pages share the per-panel RGB texture sampling.
+    """
+    page_w, page_h = ANSI_B_LANDSCAPE
+    c.setPageSize((page_w, page_h))
+    meta = _meta(roof)
+
+    # Header (matches the format of the other landscape pages)
+    c.setFont(FONT_BOLD, 14)
+    c.drawString(40, page_h - 36, "ORTHOGRAPHIC VIEWS")
+    c.setFont(FONT, 9)
+    c.drawString(40, page_h - 50, meta["project_name"])
+    c.drawRightString(page_w - 40, page_h - 36,
+                      f"Estimate {meta['estimate_number']}")
+    c.drawRightString(page_w - 40, page_h - 50,
+                      f"REV {meta['revision']}  |  {meta['date']}  |  "
+                      f"DRAWN: {meta['drawn_by']}  |  "
+                      f"Page {page_num} of {total_pages}")
+
+    # Sub-heading explains why this page exists alongside the 3D views.
+    c.setFont(FONT_ITALIC, 8.5)
+    c.setFillColor(colors.HexColor("#666666"))
+    c.drawString(
+        40, page_h - 64,
+        "Pure orthographic projection — elev=0° on every elevation. "
+        "Use these for tape-measure verification; the 3D-views page is "
+        "for shape comprehension.",
+    )
+    c.setFillColor(colors.black)
+
+    panels = roof.get("roof_panels", [])
+    if not panels:
+        c.setFont(FONT, 10)
+        c.drawCentredString(page_w / 2.0, page_h / 2.0, "(no roof geometry)")
+        return
+
+    rgb_image = roof.get("rgb_image")
+    rgb_res_m = roof.get("rgb_res_m")
+    try:
+        png_path = _render_orthographic_views_png(
+            panels, rgb_image=rgb_image, rgb_res_m=rgb_res_m,
+        )
+    except Exception as e:
+        log.warning("page ORTHO: skipping render (%s)", e)
+        c.setFont(FONT, 10)
+        c.drawCentredString(page_w / 2.0, page_h / 2.0,
+                            "(orthographic render unavailable)")
+        return
+    if png_path is None:
+        return
+    try:
+        img_x = 40.0
+        img_y = 60.0
+        img_w = page_w - 80.0
+        img_h = page_h - 130.0
+        c.drawImage(str(png_path), img_x, img_y, width=img_w, height=img_h,
+                    preserveAspectRatio=True, mask="auto")
+    finally:
+        try:
+            png_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _world_xy_to_rgb_pix(
     xy: np.ndarray, res_m: float, rgb_h: int, rgb_w: int,
 ) -> np.ndarray:
@@ -2748,7 +3026,9 @@ def generate_shop_drawings(
     # (may span multiple pages) + combined edge detail + 3D views
     n_p2 = _num_edge_trim_pages(roof)
     n_cut = _num_cut_summary_pages(roof)
-    total_pages = 1 + 2 + n_p2 + 1 + n_cut + 1 + 1
+    # +1 for the new orthographic-views page (Google aerial + 3D plan
+    # + N/S/E/W elevations) appended after the existing 3D-views page.
+    total_pages = 1 + 2 + n_p2 + 1 + n_cut + 1 + 1 + 1
 
     c = pdfcanvas.Canvas(str(output_path), pagesize=ANSI_B_PORTRAIT)
 
@@ -2795,6 +3075,13 @@ def generate_shop_drawings(
     p5_num = p4_num + 1
     log.info("shop_drawings: rendering page %d (3D views)", p5_num)
     _render_page_3d_views(c, roof, page_num=p5_num, total_pages=total_pages)
+    c.showPage()
+
+    p6_num = p5_num + 1
+    log.info("shop_drawings: rendering page %d (orthographic views)", p6_num)
+    _render_page_orthographic_views(
+        c, roof, page_num=p6_num, total_pages=total_pages,
+    )
     c.showPage()
 
     c.save()
@@ -3050,6 +3337,7 @@ def roof_dict_from_pipeline(
             try:
                 clf_predictions = predict_edges(
                     pid, poly, plane, polygons, planes,
+                    sample_id=project_meta.get("sample_id"),
                 )
             except Exception as exc:
                 log.warning("edge_classifier crashed on panel %d: %s", pid, exc)

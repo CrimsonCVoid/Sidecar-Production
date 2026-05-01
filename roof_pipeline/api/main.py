@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .config import Settings
+from .edge_classifier import router as edge_classifier_router
 from .errors import router as errors_router
 from .hillshade import router as hillshade_router
 from .labels import router as labels_router
@@ -93,6 +94,13 @@ app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 app.include_router(solar_router, prefix="/api/solar", tags=["solar"])
 app.include_router(hillshade_router, prefix="/api/hillshade", tags=["hillshade"])
 app.include_router(pdf_router, prefix="/api/pdf", tags=["pdf"])
+# Phase 4: ops surface for the edge classifier. /api/v2 prefix to keep
+# the v1 surface (which the regression check exercises) untouched.
+app.include_router(
+    edge_classifier_router,
+    prefix="/api/v2/edge-classifier",
+    tags=["edge-classifier"],
+)
 
 
 # ---------------------------------------------------------------------------

@@ -19,10 +19,13 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from roof_pipeline import telemetry
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +36,17 @@ _model: Any = None
 _label_encoder: Any = None
 _load_attempted = False
 _load_succeeded = False
+
+# Health telemetry — populated on every predict_edges call so the
+# /api/v2/edge-classifier/health endpoint can report freshness without
+# touching the model itself.
+_last_predict_at: float | None = None
+_last_predict_latency_ms: float | None = None
+_predict_total_calls = 0
+_predict_total_edges = 0
+_predict_high_confidence_edges = 0
+_load_path: str | None = None
+_model_version: str | None = None
 
 
 # Must mirror scripts/build_edge_training_set.py FEATURE_COLUMNS
@@ -80,6 +94,7 @@ def load_model(model_dir: Path | None = None) -> bool:
     """Load the model + label encoder from disk. Idempotent: a second
     call is a no-op once the first succeeded. Returns True on success."""
     global _model, _label_encoder, _load_attempted, _load_succeeded
+    global _load_path, _model_version
     _load_attempted = True
 
     target = model_dir or DEFAULT_MODEL_DIR
@@ -115,8 +130,41 @@ def load_model(model_dir: Path | None = None) -> bool:
     _model = booster
     _label_encoder = encoder
     _load_succeeded = True
-    log.info("Edge classifier loaded from %s", target)
+    _load_path = str(target.resolve())
+    # Version stamp lives in the encoder so retraining without bumping
+    # the model_version bumps something visible to ops.
+    _model_version = (
+        encoder.get("model_version") if isinstance(encoder, dict) else None
+    )
+    log.info(
+        "Edge classifier loaded from %s (version=%s)", target, _model_version
+    )
     return True
+
+
+def classifier_health() -> dict[str, Any]:
+    """Snapshot of the classifier's current state. Used by the
+    /api/v2/edge-classifier/health route — never blocks on model work,
+    safe to call from a request path."""
+    flag_on = os.environ.get("EDGE_CLASSIFIER_ENABLED", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    return {
+        "enabled_flag": flag_on,
+        "loaded": bool(_load_succeeded),
+        "load_attempted": _load_attempted,
+        "model_path": _load_path,
+        "model_version": _model_version,
+        "feature_columns": FEATURE_COLUMNS,
+        "label_classes": LABEL_CLASSES,
+        "last_predict_at": _last_predict_at,
+        "last_predict_latency_ms": _last_predict_latency_ms,
+        "predict_total_calls": _predict_total_calls,
+        "predict_total_edges": _predict_total_edges,
+        "predict_high_confidence_edges": _predict_high_confidence_edges,
+    }
 
 
 def _quantize(x: float, y: float, precision: float = 0.05) -> tuple[int, int]:
@@ -218,6 +266,7 @@ def predict_edges(
     planes: dict[int, Any],
     *,
     confidence_threshold: float = 0.6,
+    sample_id: str | None = None,
 ) -> list[tuple[str, float]] | None:
     """Predict (edge_type, confidence) for every edge on a panel.
 
@@ -226,10 +275,34 @@ def predict_edges(
     length poly.shape[0]. Per the spec, edges where confidence falls
     below confidence_threshold get None for the type so the downstream
     fallback can fill those in per-edge.
+
+    Phase 4 telemetry: emits one `edge_classifier.predicted` per panel
+    with confidence quantiles + counts. Falls through to
+    `edge_classifier.fallback` with a reason on every short-circuit
+    path so the prod telemetry surface answers "is the classifier
+    actually firing on production traffic" without SSH.
     """
+    global _last_predict_at, _last_predict_latency_ms
+    global _predict_total_calls, _predict_total_edges
+    global _predict_high_confidence_edges
+
     if not classifier_available() or _model is None or _label_encoder is None:
+        telemetry.track(
+            "edge_classifier.fallback",
+            sample_id=sample_id,
+            metadata={
+                "reason": "classifier_unavailable",
+                "panel_id": pid,
+                "flag_on": os.environ.get(
+                    "EDGE_CLASSIFIER_ENABLED", ""
+                ).lower()
+                in {"1", "true", "yes"},
+                "loaded": _load_succeeded,
+            },
+        )
         return None
 
+    started = time.perf_counter()
     M_TO_FT = 3.280839895
 
     # Panel-level features
@@ -274,18 +347,57 @@ def predict_edges(
         proba = _model.predict_proba(X)
     except Exception as exc:
         log.warning("Edge classifier predict_proba failed: %s", exc)
+        telemetry.track(
+            "edge_classifier.fallback",
+            sample_id=sample_id,
+            metadata={
+                "reason": "predict_proba_failed",
+                "panel_id": pid,
+                "exception": type(exc).__name__,
+            },
+        )
         return None
 
     classes = _label_encoder.get("classes", LABEL_CLASSES)
     out: list[tuple[str, float]] = []
+    confidences: list[float] = []
+    high_count = 0
     for i in range(n):
         row = proba[i]
         idx = int(np.argmax(row))
         confidence = float(row[idx])
+        confidences.append(confidence)
         if confidence < confidence_threshold:
             # Sentinel: caller falls back to rule for this edge.
             out.append(("", confidence))
         else:
             label = classes[idx] if idx < len(classes) else ""
             out.append((label, confidence))
+            high_count += 1
+
+    elapsed_ms = (time.perf_counter() - started) * 1000.0
+    _last_predict_at = time.time()
+    _last_predict_latency_ms = elapsed_ms
+    _predict_total_calls += 1
+    _predict_total_edges += n
+    _predict_high_confidence_edges += high_count
+
+    sorted_conf = sorted(confidences)
+    p50 = sorted_conf[len(sorted_conf) // 2] if sorted_conf else 0.0
+    p95 = sorted_conf[max(0, int(len(sorted_conf) * 0.95) - 1)] if sorted_conf else 0.0
+    telemetry.track(
+        "edge_classifier.predicted",
+        sample_id=sample_id,
+        duration_ms=elapsed_ms,
+        metadata={
+            "panel_id": pid,
+            "edge_count": n,
+            "high_confidence_count": high_count,
+            "low_confidence_count": n - high_count,
+            "confidence_p50": round(p50, 4),
+            "confidence_p95": round(p95, 4),
+            "model_version": _model_version,
+            "threshold": confidence_threshold,
+        },
+    )
     return out

@@ -12,13 +12,15 @@ Public surface:
 """
 
 from .predict import (
+    classifier_available,
+    classifier_health,
     load_model,
     predict_edges,
-    classifier_available,
 )
 
 __all__ = [
+    "classifier_available",
+    "classifier_health",
     "load_model",
     "predict_edges",
-    "classifier_available",
 ]
