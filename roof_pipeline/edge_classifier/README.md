@@ -86,6 +86,45 @@ A failure here doesn't necessarily mean roll back — the differences
 might be improvements. Visually compare the PDFs in
 `tests/benchmarks/pdfs/` against fresh exports before deciding.
 
+### Faster iteration: per-edge diff
+
+Before regenerating PDFs, the rule-vs-classifier diff tool gives a
+per-edge breakdown for one sample:
+
+```bash
+EDGE_CLASSIFIER_MODEL_DIR=$PWD/roof_pipeline/edge_classifier/artifacts \
+DATABASE_URL=postgres://... \
+python3 scripts/edge_classifier_diff.py 99572f04-68ef-4ad5-8394-864b7b55d177
+```
+
+The script forces the classifier on regardless of
+`EDGE_CLASSIFIER_ENABLED` — production behavior is untouched. Use it
+to spot-check that the model agrees with the rule on simple cases and
+disagrees productively on hips/valleys before running the full
+benchmark sweep.
+
+## Ops surface
+
+| Path | Purpose |
+|---|---|
+| `GET /api/v2/edge-classifier/health` | Snapshot: `loaded`, `model_version`, last predict latency, totals (calls, edges, high-confidence edges) since process start. Auth: internal key OR Supabase JWT. |
+| `pipeline_events` event names | `edge_classifier.predicted` (per panel: counts + p50/p95 confidence + duration), `edge_classifier.fallback` (reason) |
+
+The health endpoint is cheap (no model work, just a status snapshot).
+Safe to poll from a dashboard at any rate.
+
+## Smoke test
+
+End-to-end sanity check, runs in pytest:
+
+```bash
+python3 -m pytest roof_pipeline/tests/test_edge_classifier_smoke.py -v
+```
+
+Trains a tiny synthetic model in `tmp_path`, points the loader at it,
+exercises the predict + telemetry path. Skipped without xgboost
+installed.
+
 ## Feature design notes
 
 The 17-feature vector is designed to capture every signal the rule
