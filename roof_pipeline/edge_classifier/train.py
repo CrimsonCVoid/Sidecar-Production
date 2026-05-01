@@ -89,13 +89,37 @@ def main() -> int:
     LOG.info("Loaded %d rows; label distribution:\n%s",
              len(df), df["label"].value_counts())
 
-    df = df[df["label"].isin(LABEL_CLASSES)]
+    df = df[df["label"].isin(LABEL_CLASSES)].copy()
     if df.empty:
         LOG.error("No rows with valid labels — nothing to train on.")
         return 2
 
+    # hip_cap is a backwards-compat alias for hip (see labeler-store
+    # EDGE_TYPE_META). Merge so the classifier sees a single class.
+    df["label"] = df["label"].replace({"hip_cap": "hip"})
+
+    # Drop wall: too few samples (single-digit count) to learn from
+    # without overfitting; the rule-based fallback in
+    # _classify_panel_edges handles wall edges adequately.
+    drop_classes = {"wall"}
+    before = len(df)
+    df = df[~df["label"].isin(drop_classes)].copy()
+    if before != len(df):
+        LOG.info(
+            "Dropped %d rows in classes %s (sparse, rule fallback wins)",
+            before - len(df),
+            sorted(drop_classes),
+        )
+
+    # Train only on classes actually present in the data — XGBoost's
+    # multi:softprob trips when num_class doesn't match unique(y),
+    # which happens when an alias-merged or zero-sample class leaves
+    # a gap in the index space.
+    present_labels = [c for c in LABEL_CLASSES if c in df["label"].unique()]
+    LOG.info("Training on %d present class(es): %s", len(present_labels), present_labels)
+
     X = df[FEATURE_COLUMNS].astype(float).values
-    label_to_idx = {c: i for i, c in enumerate(LABEL_CLASSES)}
+    label_to_idx = {c: i for i, c in enumerate(present_labels)}
     y = df["label"].map(label_to_idx).astype(int).values
 
     skf = StratifiedKFold(n_splits=args.folds, shuffle=True, random_state=args.seed)
@@ -109,7 +133,7 @@ def main() -> int:
             max_depth=args.max_depth,
             learning_rate=args.learning_rate,
             random_state=args.seed,
-            num_class=len(LABEL_CLASSES),
+            num_class=len(present_labels),
             objective="multi:softprob",
             eval_metric="mlogloss",
         )
@@ -129,7 +153,7 @@ def main() -> int:
         max_depth=args.max_depth,
         learning_rate=args.learning_rate,
         random_state=args.seed,
-        num_class=len(LABEL_CLASSES),
+        num_class=len(present_labels),
         objective="multi:softprob",
         eval_metric="mlogloss",
     )
@@ -138,15 +162,20 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     final.save_model(str(args.out / "model.json"))
     (args.out / "label_encoder.json").write_text(json.dumps({
-        "classes": LABEL_CLASSES,
+        # `classes` MUST match the y-index order so predict.py can map
+        # argmax back to a label string. We dropped sparse + alias
+        # classes during training, so the saved list is the trained
+        # set, not the full lexicon.
+        "classes": present_labels,
         "feature_columns": FEATURE_COLUMNS,
         "cv_mean_accuracy": mean_acc,
         "cv_std_accuracy": std_acc,
+        "n_train_rows": int(len(df)),
     }, indent=2))
 
     final_preds = final.predict(X)
     LOG.info("Training set classification report:\n%s",
-             classification_report(y, final_preds, target_names=LABEL_CLASSES))
+             classification_report(y, final_preds, target_names=present_labels))
     LOG.info("Saved model -> %s", args.out)
     return 0
 

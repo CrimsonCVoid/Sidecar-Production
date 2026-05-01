@@ -1,0 +1,31 @@
+{
+  "classes": [
+    "eave",
+    "rake",
+    "ridge",
+    "hip",
+    "valley"
+  ],
+  "feature_columns": [
+    "edge_length_ft",
+    "edge_dx",
+    "edge_dy",
+    "edge_z_min",
+    "edge_z_max",
+    "edge_z_delta",
+    "panel_area_sqft",
+    "panel_z_min",
+    "panel_z_max",
+    "panel_normal_x",
+    "panel_normal_y",
+    "panel_normal_z",
+    "panel_slope_rise",
+    "edge_is_horizontal",
+    "edge_is_steep_diag",
+    "shared_with_neighbor",
+    "neighbor_normal_dot"
+  ],
+  "cv_mean_accuracy": 0.6659352142110764,
+  "cv_std_accuracy": 0.069621741378024,
+  "n_train_rows": 437
+}
