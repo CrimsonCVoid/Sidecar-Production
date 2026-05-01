@@ -132,11 +132,19 @@ def _extract_largest_polygon(geom, pid: int) -> Polygon | None:
             ratio = 0.0
 
         if ratio < _MULTI_AREA_RATIO_MIN:
-            raise RuntimeError(
-                f"panel {pid}: make_valid produced MultiPolygon with "
-                f"largest piece ratio {ratio:.3f} < 0.95 -- "
-                f"too much geometry lost"
+            # Aggressive degradation: make_valid scattered the panel
+            # into pieces too small to trust. Don't kill the whole
+            # cutsheet — return None and let the caller fall back to
+            # the pre-repair polygon for this panel. The mesh build
+            # may still drop a degenerate panel downstream, but the
+            # rest of the roof renders.
+            log.warning(
+                "panel %d: make_valid produced MultiPolygon with "
+                "largest piece ratio %.3f < %.2f — falling back to "
+                "pre-repair polygon (cutsheet continues)",
+                pid, ratio, _MULTI_AREA_RATIO_MIN,
             )
+            return None
 
         log.warning(
             "panel %d: MultiPolygon from make_valid, keeping largest "
