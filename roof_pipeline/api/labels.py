@@ -294,7 +294,10 @@ async def get_labels(
     Returns 404 if no labels exist for the sample.
     """
     request.state.sample_id = sample_id
-    verify_sample_access(principal, sample_id, supabase)
+    # read_only=True so training capturers (migration 028) can load existing
+    # labels for any sample to seed their scratch editor view. Mutate path
+    # (POST /labels) stays strict.
+    verify_sample_access(principal, sample_id, supabase, read_only=True)
 
     result = (
         supabase.table("training_labels")
