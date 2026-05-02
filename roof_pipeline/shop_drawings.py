@@ -1151,7 +1151,8 @@ def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | Non
     return perp, best_len
 
 
-RIDGE_HIP_TYPES: tuple[str, ...] = ("RIDGE", "HIP", "HIP_CAP", "VALLEY")
+EAVE_TYPES: tuple[str, ...] = ("EAVE",)
+RAKE_TYPES: tuple[str, ...] = ("RAKE", "GABLE")
 
 
 def _resolve_run_direction(
@@ -1166,88 +1167,101 @@ def _resolve_run_direction(
     """Pick the down-slope run direction. Returns (unit_xy, source_tag).
 
     Strategy chain, first hit wins:
-      1. ``ridge_or_hip_label`` — length-weighted bearing of edges
-         tagged RIDGE / HIP / VALLEY. Run is perpendicular to that
-         bearing, oriented AWAY from the ridge/hip centroid (toward
-         the eave / lower part of the face). Sheets seam parallel to
-         the ridge, which is what every metal roofer wants. Works
-         uniformly on gable faces (one ridge), hip faces (two hips
-         meeting at an apex point with no ridge edge), and cross-hip
-         shapes.
-      2. ``gradient`` — plane-normal projection. Skipped when the
-         plane is below the low-slope threshold (Fix 3) or the RANSAC
-         residual is above ``high_residual_m`` (Fix 7).
-      3. ``longest_edge`` — perpendicular to the longest polygon edge.
-         The no-labels, no-confidence fallback.
+      1. ``gradient`` — plane-normal projection (down-slope = horizontal
+         component of the normal, flipped). This is the original signal
+         and over thousands of mask pixels it converges to truth. Used
+         whenever pitch ≥ low_slope_pitch_deg AND RANSAC residual is
+         healthy (< high_residual_m).
+      2. ``eave_perp_fallback`` — perpendicular to the EAVE bearing,
+         oriented toward the eave centroid. Used only when the gradient
+         is unreliable AND the labeler tagged at least one eave edge.
+      3. ``rake_along_fallback`` — along the RAKE bearing, oriented
+         toward the eave end of the face. Used when no eave label is
+         available either, but rakes / gables are tagged.
+      4. ``longest_edge_perp`` — last-resort flat-roof fallback.
 
-    Earlier versions used the eave label as the primary signal and
-    snapped the result to the longest-edge perpendicular. Both were
-    removed: eave labels are less reliable than ridge/hip labels
-    (labelers confuse eaves with rakes far more often than they
-    confuse ridges with anything), and the snap added ~0.5° of fit
-    while introducing failure modes on faces where the longest edge
-    happened to be a rake.
+    Sheets are perpendicular to the eave (cross the eave at 90°) and
+    parallel to the rakes (run along the gable ends), which is what
+    the contractor expects. Earlier iterations tried label-based
+    primary strategies (eave-perp first, then ridge/hip-perp first);
+    both regressed against this gradient-primary chain because
+    individual edge labels carry more orientation noise than the
+    plane fit does.
     """
     polygon_xy = np.asarray(polygon_xy, dtype=float)[:, :2]
-    chosen: np.ndarray | None = None
-    source = "unknown"
 
-    # 1. Ridge / hip label
+    # 1. Gradient (primary)
+    nx, ny, nz = (
+        float(plane_normal[0]),
+        float(plane_normal[1]),
+        float(plane_normal[2]),
+    )
+    pitch_from_vertical_deg = math.degrees(
+        math.acos(max(-1.0, min(1.0, abs(nz))))
+    )
+    residual_too_high = (
+        plane_residual_m is not None and plane_residual_m > high_residual_m
+    )
+    horiz = math.hypot(nx, ny)
+    if (
+        pitch_from_vertical_deg >= low_slope_pitch_deg
+        and not residual_too_high
+        and horiz > 1e-9
+    ):
+        return -np.array([nx, ny]) / horiz, "gradient"
+
+    face_centroid = polygon_xy.mean(axis=0)
+
+    # 2. Eave-perp fallback (only when gradient bowed out)
     if edge_types and len(edge_types) == polygon_xy.shape[0]:
-        bearing = _length_weighted_bearing(polygon_xy, edge_types, RIDGE_HIP_TYPES)
-        rh_centroid = _length_weighted_centroid(polygon_xy, edge_types, RIDGE_HIP_TYPES)
-        if bearing is not None and rh_centroid is not None:
+        eave_bearing = _length_weighted_bearing(
+            polygon_xy, edge_types, EAVE_TYPES,
+        )
+        eave_centroid = _length_weighted_centroid(
+            polygon_xy, edge_types, EAVE_TYPES,
+        )
+        if eave_bearing is not None and eave_centroid is not None:
             perp_a = np.array([
-                math.cos(bearing + math.pi / 2),
-                math.sin(bearing + math.pi / 2),
+                math.cos(eave_bearing + math.pi / 2),
+                math.sin(eave_bearing + math.pi / 2),
             ])
-            # Run points AWAY from the ridge/hip centroid (toward the eave).
-            face_centroid = polygon_xy.mean(axis=0)
-            away_from_ridge = face_centroid - rh_centroid
-            chosen = perp_a if float(perp_a @ away_from_ridge) > 0 else -perp_a
-            source = "ridge_or_hip_label"
+            toward_eave = eave_centroid - face_centroid
+            chosen = perp_a if float(perp_a @ toward_eave) > 0 else -perp_a
+            tag = "eave_perp_low_slope" if pitch_from_vertical_deg < low_slope_pitch_deg else "eave_perp_high_residual"
+            return chosen / float(np.linalg.norm(chosen)), tag
 
-    # 2. Plane gradient
-    if chosen is None:
-        nx, ny, nz = (
-            float(plane_normal[0]),
-            float(plane_normal[1]),
-            float(plane_normal[2]),
+    # 3. Rake-along fallback (rakes are inline with the run direction)
+    if edge_types and len(edge_types) == polygon_xy.shape[0]:
+        rake_bearing = _length_weighted_bearing(
+            polygon_xy, edge_types, RAKE_TYPES,
         )
-        pitch_from_vertical_deg = math.degrees(
-            math.acos(max(-1.0, min(1.0, abs(nz))))
+        rake_centroid = _length_weighted_centroid(
+            polygon_xy, edge_types, RAKE_TYPES,
         )
-        residual_too_high = (
-            plane_residual_m is not None and plane_residual_m > high_residual_m
-        )
-        horiz = math.hypot(nx, ny)
-        if (
-            pitch_from_vertical_deg >= low_slope_pitch_deg
-            and not residual_too_high
-            and horiz > 1e-9
-        ):
-            chosen = -np.array([nx, ny]) / horiz
-            source = "gradient"
+        if rake_bearing is not None and rake_centroid is not None:
+            # Rake direction (along the rake bearing). Bearing is in
+            # [0, π) — pick the orientation that points away from the
+            # rake centroid (which sits high; we want to head down).
+            dir_a = np.array([math.cos(rake_bearing), math.sin(rake_bearing)])
+            away_from_rake = face_centroid - rake_centroid
+            chosen = dir_a if float(dir_a @ away_from_rake) > 0 else -dir_a
+            tag = "rake_along_low_slope" if pitch_from_vertical_deg < low_slope_pitch_deg else "rake_along_high_residual"
+            return chosen / float(np.linalg.norm(chosen)), tag
 
-    # 3. Longest-edge perpendicular fallback
-    if chosen is None:
-        edge = _longest_edge_perp(polygon_xy)
-        if edge is None:
-            return np.array([1.0, 0.0]), "default_axis"
-        chosen, _ = edge
-        face_centroid = polygon_xy.mean(axis=0)
-        proj = (polygon_xy - face_centroid) @ chosen
-        if proj.max() < -proj.min():
-            chosen = -chosen
-        if plane_residual_m is not None and plane_residual_m > high_residual_m:
-            source = "longest_edge_high_residual"
-        else:
-            source = "longest_edge_flat"
-
+    # 4. Longest-edge perpendicular last resort
+    edge = _longest_edge_perp(polygon_xy)
+    if edge is None:
+        return np.array([1.0, 0.0]), "default_axis"
+    chosen, _ = edge
+    proj = (polygon_xy - face_centroid) @ chosen
+    if proj.max() < -proj.min():
+        chosen = -chosen
     norm = float(np.linalg.norm(chosen))
     if norm < 1e-9:
         return np.array([1.0, 0.0]), "default_axis"
-    return chosen / norm, source
+    if residual_too_high:
+        return chosen / norm, "longest_edge_high_residual"
+    return chosen / norm, "longest_edge_flat"
 
 
 def _detect_face_split_candidate(
