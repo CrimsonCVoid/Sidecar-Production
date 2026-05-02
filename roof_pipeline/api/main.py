@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from .check_corner import router as check_corner_router
 from .config import Settings
 from .edge_classifier import router as edge_classifier_router
 from .errors import router as errors_router
@@ -90,6 +91,8 @@ app.include_router(snap_router, prefix="/api/snap", tags=["snap"])
 app.include_router(pipeline_router, prefix="/api/pipeline", tags=["pipeline"])
 app.include_router(straighten_router, prefix="/api/pipeline", tags=["pipeline"])
 app.include_router(labels_router, prefix="/api/labels", tags=["labels"])
+# Click-time DSM check sits on the labels prefix so the auth path matches.
+app.include_router(check_corner_router, prefix="/api/labels", tags=["labels"])
 app.include_router(errors_router, prefix="/api/errors", tags=["errors"])
 app.include_router(solar_router, prefix="/api/solar", tags=["solar"])
 app.include_router(hillshade_router, prefix="/api/hillshade", tags=["hillshade"])

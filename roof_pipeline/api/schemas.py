@@ -80,6 +80,40 @@ class PipelineRunStatus(BaseModel):
 # Labels (API-03, D-07 stub)
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Click-time corner check (DSM-aware UX)
+# ---------------------------------------------------------------------------
+
+class CheckCornerRequest(BaseModel):
+    """Request body for POST /labels/{sample_id}/check-corner.
+
+    Sent by the labeler each time a vertex is placed (or moved) so the UI
+    can show a popup if the click landed on canopy. Stateless — DB-touched
+    only for DSM + meters_per_px lookup, no writes.
+    """
+
+    col: float
+    row: float
+    corner_idx: int = 0
+    # The full set of pixel corners for this panel as drawn so far. With
+    # >=3 we can fit a roof plane and judge the click against it; with
+    # fewer we fall back to local DSM-patch heuristics.
+    panel_corners: list[list[float]] = []
+
+
+class CheckCornerResponse(BaseModel):
+    """Response from POST /labels/{sample_id}/check-corner."""
+
+    dsm_z_bilinear: float          # raw bilinear sample at the click (often canopy)
+    dsm_z_robust: float            # window-percentile sample (canopy-suppressed)
+    plane_z: float | None = None   # RANSAC roof plane prediction at click XY
+    nn_z: float | None = None      # XGBoost predictor output if model loaded
+    suggested_z: float             # what the UI should auto-correct to
+    source: str                    # "nn" | "plane" | "robust_sample"
+    is_anomalous: bool             # show the popup?
+    residual_m: float              # |dsm_z_bilinear - suggested_z|
+
+
 class FlaggedCorner(BaseModel):
     """One panel corner whose Z is suspect after DSM-aware checks.
 
