@@ -1047,7 +1047,6 @@ def _render_page1(
 # installer expects.
 
 LOW_SLOPE_PITCH_DEG = 7.0   # below this we don't trust the gradient
-SNAP_TO_EDGE_DEG = 3.0       # snap run_dir to longest_edge_perp if within
 HIGH_RESIDUAL_M = 0.20       # plane RANSAC residual above which gradient is demoted
 LONG_FACE_ASPECT = 5.0       # plan-view aspect ratio that flags a face as "split me"
 
@@ -1055,27 +1054,29 @@ LONG_FACE_ASPECT = 5.0       # plan-view aspect ratio that flags a face as "spli
 def _length_weighted_bearing(
     polygon_xy: np.ndarray,
     edge_types: list[str],
-    target_type: str,
+    target_types: tuple[str, ...] | str,
 ) -> float | None:
-    """Length-weighted circular mean bearing of edges with a given type.
+    """Length-weighted circular mean bearing of edges in target_types.
 
     Returns an angle in [0, π) — bearing is direction-less (a line, not
-    a vector). None when no edges of that type exist.
+    a vector). None when no edges match.
 
-    Why circular-mean over arithmetic-mean: an eave that wraps across
-    horizontal can have edge angles like 1° and 179°, which average to
-    90° (perpendicular!) instead of ~0° (the actual eave line). We map
-    angles to 2θ on the unit circle, average, then halve back. Length
-    weighting protects against a 6-inch dormer stub outvoting a 30-foot
-    main eave.
+    Circular-mean over arithmetic: an edge set with bearings 1° and
+    179° averages to 0° (correct: same line) on this routine, not 90°
+    (perpendicular!). We map angles to 2θ on the unit circle, average,
+    halve back. Length weighting protects against a 6-inch dormer
+    stub outvoting a 30-foot main edge of the same type.
     """
     n = len(polygon_xy)
     if n < 2 or len(edge_types) != n:
         return None
+    if isinstance(target_types, str):
+        target_types = (target_types,)
+    targets_upper = {t.upper() for t in target_types}
     sx, sy = 0.0, 0.0
     total_w = 0.0
     for i in range(n):
-        if str(edge_types[i]).upper() != target_type.upper():
+        if str(edge_types[i]).upper() not in targets_upper:
             continue
         a = polygon_xy[i]
         b = polygon_xy[(i + 1) % n]
@@ -1095,18 +1096,21 @@ def _length_weighted_bearing(
 def _length_weighted_centroid(
     polygon_xy: np.ndarray,
     edge_types: list[str],
-    target_type: str,
+    target_types: tuple[str, ...] | str,
 ) -> np.ndarray | None:
-    """Length-weighted midpoint of edges of a given type. Used to pick the
-    sign of the down-slope perpendicular: from the polygon centroid,
-    run_dir points TOWARD this centroid (water flows toward the eave)."""
+    """Length-weighted midpoint of edges of the given types. Used to pick the
+    sign of the down-slope perpendicular: run_dir points AWAY from the
+    ridge/hip centroid (the top of the face), toward the eave."""
     n = len(polygon_xy)
     if n < 2 or len(edge_types) != n:
         return None
+    if isinstance(target_types, str):
+        target_types = (target_types,)
+    targets_upper = {t.upper() for t in target_types}
     acc = np.zeros(2)
     total_w = 0.0
     for i in range(n):
-        if str(edge_types[i]).upper() != target_type.upper():
+        if str(edge_types[i]).upper() not in targets_upper:
             continue
         a = polygon_xy[i]
         b = polygon_xy[(i + 1) % n]
@@ -1147,54 +1151,72 @@ def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | Non
     return perp, best_len
 
 
+RIDGE_HIP_TYPES: tuple[str, ...] = ("RIDGE", "HIP", "HIP_CAP", "VALLEY")
+
+
 def _resolve_run_direction(
     polygon_xy: np.ndarray,
     plane_normal: np.ndarray,
     *,
     edge_types: list[str] | None = None,
     plane_residual_m: float | None = None,
-    snap_deg: float = SNAP_TO_EDGE_DEG,
     low_slope_pitch_deg: float = LOW_SLOPE_PITCH_DEG,
     high_residual_m: float = HIGH_RESIDUAL_M,
 ) -> tuple[np.ndarray, str]:
     """Pick the down-slope run direction. Returns (unit_xy, source_tag).
 
     Strategy chain, first hit wins:
-      1. ``eave_label`` — length-weighted eave bearing (Fix 1, 2). Run
-         is perpendicular to the eave, oriented toward the eave centroid.
-      2. ``gradient`` — plane-normal projection. Skipped if the plane
-         is below the low-slope threshold (Fix 3) OR the RANSAC
+      1. ``ridge_or_hip_label`` — length-weighted bearing of edges
+         tagged RIDGE / HIP / VALLEY. Run is perpendicular to that
+         bearing, oriented AWAY from the ridge/hip centroid (toward
+         the eave / lower part of the face). Sheets seam parallel to
+         the ridge, which is what every metal roofer wants. Works
+         uniformly on gable faces (one ridge), hip faces (two hips
+         meeting at an apex point with no ridge edge), and cross-hip
+         shapes.
+      2. ``gradient`` — plane-normal projection. Skipped when the
+         plane is below the low-slope threshold (Fix 3) or the RANSAC
          residual is above ``high_residual_m`` (Fix 7).
       3. ``longest_edge`` — perpendicular to the longest polygon edge.
-         The flat-roof / no-info fallback.
+         The no-labels, no-confidence fallback.
 
-    After picking a direction, if it lies within ``snap_deg`` of the
-    longest-edge perpendicular AND we didn't already pick that, snap
-    to the edge perpendicular (Fix 5) and tag the source with ``_snapped``.
+    Earlier versions used the eave label as the primary signal and
+    snapped the result to the longest-edge perpendicular. Both were
+    removed: eave labels are less reliable than ridge/hip labels
+    (labelers confuse eaves with rakes far more often than they
+    confuse ridges with anything), and the snap added ~0.5° of fit
+    while introducing failure modes on faces where the longest edge
+    happened to be a rake.
     """
     polygon_xy = np.asarray(polygon_xy, dtype=float)[:, :2]
-
     chosen: np.ndarray | None = None
     source = "unknown"
 
-    # 1. Eave label
+    # 1. Ridge / hip label
     if edge_types and len(edge_types) == polygon_xy.shape[0]:
-        bearing = _length_weighted_bearing(polygon_xy, edge_types, "EAVE")
-        eave_centroid = _length_weighted_centroid(polygon_xy, edge_types, "EAVE")
-        if bearing is not None and eave_centroid is not None:
-            # Run direction is perpendicular to the eave bearing, pointing
-            # toward the eave from the polygon centroid.
-            perp_a = np.array([math.cos(bearing + math.pi / 2),
-                               math.sin(bearing + math.pi / 2)])
+        bearing = _length_weighted_bearing(polygon_xy, edge_types, RIDGE_HIP_TYPES)
+        rh_centroid = _length_weighted_centroid(polygon_xy, edge_types, RIDGE_HIP_TYPES)
+        if bearing is not None and rh_centroid is not None:
+            perp_a = np.array([
+                math.cos(bearing + math.pi / 2),
+                math.sin(bearing + math.pi / 2),
+            ])
+            # Run points AWAY from the ridge/hip centroid (toward the eave).
             face_centroid = polygon_xy.mean(axis=0)
-            toward_eave = eave_centroid - face_centroid
-            chosen = perp_a if float(perp_a @ toward_eave) > 0 else -perp_a
-            source = "eave_label"
+            away_from_ridge = face_centroid - rh_centroid
+            chosen = perp_a if float(perp_a @ away_from_ridge) > 0 else -perp_a
+            source = "ridge_or_hip_label"
 
-    # 2. Plane gradient (only if pitch is meaningful and plane fit isn't noisy)
+    # 2. Plane gradient
     if chosen is None:
-        nx, ny, nz = float(plane_normal[0]), float(plane_normal[1]), float(plane_normal[2])
-        pitch_from_vertical_deg = math.degrees(math.acos(max(-1.0, min(1.0, abs(nz)))))
+        nx, ny, nz = (
+            float(plane_normal[0]),
+            float(plane_normal[1]),
+            float(plane_normal[2]),
+        )
+        pitch_from_vertical_deg = math.degrees(
+            math.acos(max(-1.0, min(1.0, abs(nz))))
+        )
         residual_too_high = (
             plane_residual_m is not None and plane_residual_m > high_residual_m
         )
@@ -1213,9 +1235,7 @@ def _resolve_run_direction(
         if edge is None:
             return np.array([1.0, 0.0]), "default_axis"
         chosen, _ = edge
-        # Sign: point from centroid outward via the longer-perp side
         face_centroid = polygon_xy.mean(axis=0)
-        # Use the direction the polygon extends most along chosen
         proj = (polygon_xy - face_centroid) @ chosen
         if proj.max() < -proj.min():
             chosen = -chosen
@@ -1223,20 +1243,6 @@ def _resolve_run_direction(
             source = "longest_edge_high_residual"
         else:
             source = "longest_edge_flat"
-
-    # 5. Snap to longest-edge perp when we're within snap_deg of it
-    edge = _longest_edge_perp(polygon_xy)
-    if edge is not None:
-        edge_perp, _ = edge
-        # Direction-less alignment: |cos(angle)|, snap if angle ≤ snap_deg
-        cos_aligned = abs(float(np.clip(chosen @ edge_perp, -1.0, 1.0)))
-        ang_deg = math.degrees(math.acos(cos_aligned))
-        if ang_deg < snap_deg and not source.startswith("longest_edge"):
-            # Preserve our chosen direction's sign (down-slope) when snapping
-            if float(chosen @ edge_perp) < 0:
-                edge_perp = -edge_perp
-            chosen = edge_perp
-            source = source + "_snapped"
 
     norm = float(np.linalg.norm(chosen))
     if norm < 1e-9:
