@@ -2464,6 +2464,7 @@ def _render_orthographic_views_png(
     *,
     rgb_image: np.ndarray | None = None,
     rgb_res_m: float | None = None,
+    birdseye_views: dict[str, bytes] | None = None,
 ) -> Path | None:
     """Six-cell composite: AERIAL + 3D plan + four angled ortho views.
 
@@ -2650,10 +2651,42 @@ def _render_orthographic_views_png(
             fontsize=11, fontweight="bold",
         )
 
-    populate_elev(ax_n, azim=-90.0, title="LOOKING SOUTH")
-    populate_elev(ax_s, azim=90.0,  title="LOOKING NORTH")
-    populate_elev(ax_e, azim=0.0,   title="LOOKING WEST")
-    populate_elev(ax_w, azim=180.0, title="LOOKING EAST")
+    # Per-cell choice: Bird's Eye oblique photo if Bing returned coverage
+    # for that direction, otherwise the 3D-mesh fallback. The mapping
+    # below pairs each axis in the figure with the title we'd show, the
+    # azimuth for the mesh fallback, and the Bing label that would
+    # supply a real photo for the same viewing direction.
+    cells = [
+        (ax_n, gs[0, 2], "LOOKING SOUTH", -90.0, "looking_south"),
+        (ax_s, gs[1, 2], "LOOKING NORTH",  90.0, "looking_north"),
+        (ax_e, gs[0, 3], "LOOKING WEST",    0.0, "looking_west"),
+        (ax_w, gs[1, 3], "LOOKING EAST",  180.0, "looking_east"),
+    ]
+    for ax, slot, title, azim, label in cells:
+        photo_bytes = (birdseye_views or {}).get(label)
+        if photo_bytes:
+            # Swap the pre-created 3D subplot for a 2D image axis at
+            # the same grid slot. `imshow` doesn't work on a 3D axes.
+            try:
+                from io import BytesIO
+                from PIL import Image
+                img = Image.open(BytesIO(photo_bytes)).convert("RGB")
+                fig.delaxes(ax)
+                ax_photo = fig.add_subplot(slot)
+                ax_photo.imshow(img)
+                ax_photo.set_axis_off()
+                ax_photo.set_title(
+                    f"{title} (Bing Bird's Eye)",
+                    fontsize=10, fontweight="bold",
+                )
+                continue
+            except Exception as e:
+                # Bad payload or PIL hiccup — fall through to mesh.
+                log.warning(
+                    "birdseye photo decode failed for %s (%s) — using mesh",
+                    label, e,
+                )
+        populate_elev(ax, azim=azim, title=title)
 
     fd, tmp = tempfile.mkstemp(suffix=".png")
     import os
@@ -2708,9 +2741,13 @@ def _render_page_orthographic_views(
 
     rgb_image = roof.get("rgb_image")
     rgb_res_m = roof.get("rgb_res_m")
+    birdseye_views = roof.get("birdseye_views")
     try:
         png_path = _render_orthographic_views_png(
-            panels, rgb_image=rgb_image, rgb_res_m=rgb_res_m,
+            panels,
+            rgb_image=rgb_image,
+            rgb_res_m=rgb_res_m,
+            birdseye_views=birdseye_views,
         )
     except Exception as e:
         log.warning("page ORTHO: skipping render (%s)", e)

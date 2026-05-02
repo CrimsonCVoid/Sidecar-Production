@@ -35,6 +35,18 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _fetch_birdseye(settings: Settings, lat: float | None, lng: float | None) -> dict[str, bytes]:
+    """Best-effort Bing Bird's Eye fetch. Empty dict on any failure."""
+    if not settings.bing_maps_key:
+        return {}
+    try:
+        from ..bing_birdseye import fetch_birdseye_views
+        return fetch_birdseye_views(lat, lng, settings.bing_maps_key)
+    except Exception as exc:
+        log.warning("birdseye fetch failed: %s", exc)
+        return {}
+
+
 def _fetch_rgb_bytes(supabase: Client, settings: Settings, rgb_storage_path: str | None) -> bytes | None:
     """Best-effort download of the RGB GeoTIFF for a sample.
 
@@ -184,6 +196,12 @@ async def _run_pipeline_bg(
             rgb_bytes = _fetch_rgb_bytes(
                 supabase, settings, sample.get("rgb_storage_path"),
             )
+            # Optional Bing Bird's Eye oblique photos for the four
+            # angled cells on the orthographic-views page. Empty dict
+            # → mesh fallback per direction.
+            birdseye_views = _fetch_birdseye(
+                settings, sample.get("lat"), sample.get("lng"),
+            )
 
             # Run pipeline in thread to avoid blocking event loop (D-12)
             out_dir = tmp_path / "output"
@@ -203,6 +221,7 @@ async def _run_pipeline_bg(
                 profile=request_body.profile,
                 waste_pct=request_body.waste_pct,
                 rgb_bytes=rgb_bytes,
+                birdseye_views=birdseye_views,
             )
 
             _update_status(supabase, run_id, status="running", stage_name="uploading", progress_pct=90)
@@ -447,7 +466,7 @@ async def generate_pdf(
         supabase.table("training_samples")
         .select(
             "dsm_storage_path, rgb_storage_path, formatted_address, "
-            "source_address, meters_per_px"
+            "source_address, meters_per_px, lat, lng"
         )
         .eq("id", sample_id)
         .execute()
@@ -512,6 +531,10 @@ async def generate_pdf(
         rgb_bytes = _fetch_rgb_bytes(
             supabase, settings, sample.get("rgb_storage_path"),
         )
+        # Best-effort Bing Bird's Eye oblique photos.
+        birdseye_views = _fetch_birdseye(
+            settings, sample.get("lat"), sample.get("lng"),
+        )
 
         out_dir = tmp_path / "output"
 
@@ -529,6 +552,7 @@ async def generate_pdf(
             project_address=address,
             estimate_number=sample_id[:8],
             rgb_bytes=rgb_bytes,
+            birdseye_views=birdseye_views,
         )
 
         # Find the cutsheets PDF
@@ -617,7 +641,7 @@ async def generate_finalized_pdf(
         supabase.table("training_samples")
         .select(
             "dsm_storage_path, rgb_storage_path, formatted_address, "
-            "source_address, meters_per_px"
+            "source_address, meters_per_px, lat, lng"
         )
         .eq("id", sample_id)
         .execute()
@@ -802,6 +826,10 @@ async def generate_finalized_pdf(
         rgb_bytes = _fetch_rgb_bytes(
             supabase, settings, sample.get("rgb_storage_path"),
         )
+        # Best-effort Bing Bird's Eye photos.
+        birdseye_views = _fetch_birdseye(
+            settings, sample.get("lat"), sample.get("lng"),
+        )
 
         output_paths = await asyncio.to_thread(
             run_pipeline,
@@ -817,6 +845,7 @@ async def generate_finalized_pdf(
             coverage_in=coverage_in,
             profile=profile,
             rgb_bytes=rgb_bytes,
+            birdseye_views=birdseye_views,
         )
 
         pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")

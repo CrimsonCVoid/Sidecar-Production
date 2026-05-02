@@ -35,3 +35,4 @@ class Settings(BaseSettings):
     pdf_signed_url_ttl_seconds: int = 3600
     internal_api_key: str = ""  # Shared secret between Next.js proxy and this sidecar
     dev_allow_unauth: bool = False  # If true, accepts unauth'd requests from localhost only. Dev tooling escape hatch — never set in prod.
+    bing_maps_key: str = ""  # Optional Bing Maps API key for Bird's Eye oblique imagery on the orthographic-views PDF page. When unset, the 3D-mesh fallback runs (current behavior). MS deprecated the API in 2024; new keys may not work.
