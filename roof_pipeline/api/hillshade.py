@@ -120,7 +120,7 @@ async def get_hillshade(
     principal: Principal = Depends(require_principal),
 ):
     """Render and return a hillshade PNG for a training sample's DSM."""
-    verify_sample_access(principal, sample_id, supabase)
+    verify_sample_access(principal, sample_id, supabase, read_only=True)
     dsm_arr = load_dsm(supabase, settings, sample_id)
     shade = _render_hillshade(dsm_arr)
     png_bytes = _to_png(shade)
@@ -140,7 +140,7 @@ async def get_rgb(
     principal: Principal = Depends(require_principal),
 ):
     """Return the satellite RGB image as PNG for a training sample."""
-    verify_sample_access(principal, sample_id, supabase)
+    verify_sample_access(principal, sample_id, supabase, read_only=True)
     result = (
         supabase.table("training_samples")
         .select("rgb_storage_path")
@@ -196,7 +196,7 @@ async def get_heatmap(
     principal: Principal = Depends(require_principal),
 ):
     """Render and return a DSM elevation heatmap PNG (inferno colormap, RGBA)."""
-    verify_sample_access(principal, sample_id, supabase)
+    verify_sample_access(principal, sample_id, supabase, read_only=True)
     dsm_arr = load_dsm(supabase, settings, sample_id)
     heatmap = _render_heatmap(dsm_arr)
     png_bytes = _to_png(heatmap)

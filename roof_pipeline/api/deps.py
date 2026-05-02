@@ -199,6 +199,8 @@ def verify_sample_access(
     principal: Principal,
     sample_id: str,
     supabase: Client,
+    *,
+    read_only: bool = False,
 ) -> None:
     """Ensure the principal is allowed to act on ``sample_id``.
 
@@ -211,6 +213,13 @@ def verify_sample_access(
         for the sample_id, we deny — orphan samples (e.g. from the labeling
         ``/api/solar/ingest`` flow that haven't been linked to a project)
         can only be accessed via the internal/proxy path.
+
+    ``read_only=True`` opens a fall-through for users carrying the
+    ``is_training_capturer`` flag (migration 028): they can read tiles and
+    other read-only artifacts for ANY sample so they can edit on a scratch
+    layer. The fall-through is **not** consulted on mutate endpoints —
+    capturer edits only land via the website's /api/training-capture route,
+    which forks to a new owned project. See ``project_mmr_architecture.md``.
 
     Raises:
       ``HTTPException(403)`` on denial. Intentionally returns the same status
@@ -237,27 +246,43 @@ def verify_sample_access(
         raise HTTPException(status_code=403, detail="Forbidden") from None
 
     row = result.data if result else None
-    if not row:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    if row:
+        if row.get("user_id") == principal.user_id:
+            return
 
-    if row.get("user_id") == principal.user_id:
-        return
+        org_id = row.get("organization_id")
+        if org_id:
+            try:
+                membership = (
+                    supabase.table("organization_members")
+                    .select("user_id")
+                    .eq("org_id", org_id)
+                    .eq("user_id", principal.user_id)
+                    .maybe_single()
+                    .execute()
+                )
+            except Exception:
+                log.exception("organization_members lookup failed")
+                raise HTTPException(status_code=403, detail="Forbidden") from None
+            if membership and membership.data:
+                return
 
-    org_id = row.get("organization_id")
-    if org_id:
+    # Capturer fall-through: only on read_only endpoints, only after the
+    # normal ownership/membership lookups have failed. Strictly never on
+    # mutate paths — see docstring.
+    if read_only:
         try:
-            membership = (
-                supabase.table("organization_members")
-                .select("user_id")
-                .eq("org_id", org_id)
-                .eq("user_id", principal.user_id)
+            cap = (
+                supabase.table("users")
+                .select("is_training_capturer")
+                .eq("id", principal.user_id)
                 .maybe_single()
                 .execute()
             )
         except Exception:
-            log.exception("organization_members lookup failed")
-            raise HTTPException(status_code=403, detail="Forbidden") from None
-        if membership and membership.data:
+            log.exception("capturer flag lookup failed in verify_sample_access")
+            cap = None
+        if cap and getattr(cap, "data", None) and cap.data.get("is_training_capturer"):
             return
 
     raise HTTPException(status_code=403, detail="Forbidden")
