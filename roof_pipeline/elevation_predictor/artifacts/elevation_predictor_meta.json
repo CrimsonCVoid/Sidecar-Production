@@ -1,0 +1,39 @@
+{
+  "model_version": "elevation_predictor_v2",
+  "training_date": "2026-05-02T00:20:19Z",
+  "target_column": "target_z",
+  "feature_columns": [
+    "col_px",
+    "row_px",
+    "panel_corner_count",
+    "patch_mean",
+    "patch_std",
+    "patch_min",
+    "patch_p20",
+    "patch_p50",
+    "patch_p80",
+    "patch_max",
+    "dsm_z_bilinear",
+    "dsm_z_robust",
+    "siblings_z_median",
+    "siblings_z_std",
+    "meters_per_px"
+  ],
+  "hyperparameters": {
+    "n_estimators": 400,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "random_state": 42,
+    "objective": "reg:squarederror"
+  },
+  "cv_mean_mae": 0.2104198923978108,
+  "cv_std_mae": 0.034532002852946705,
+  "baseline_mae_bilinear": 0.27256460001398747,
+  "baseline_mae_robust": 0.5138726675553664,
+  "n_train_rows": 2738,
+  "id_columns": [
+    "sample_id",
+    "panel_id",
+    "corner_idx"
+  ]
+}

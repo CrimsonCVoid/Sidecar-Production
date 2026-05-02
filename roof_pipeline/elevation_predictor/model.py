@@ -24,6 +24,15 @@ CSV_TARGET_COLUMNS = ["target_z", "target_delta_z"]
 # Features fed to the regressor, in train/inference order. Adding a
 # feature requires bumping `MODEL_VERSION` and retraining; predict.py
 # refuses to score rows whose dict keys don't cover this list.
+#
+# Plane parameters (plane_normal_*, plane_d, plane_rms_residual) are
+# deliberately NOT here — the regression target is the plane prediction,
+# so feeding plane params to the model lets it solve the closed-form
+# z = (d - n_x*x - n_y*y) / n_z and adds zero value at inference time
+# (the endpoint already has the plane). Dropping them forces the model
+# to learn a real correction from raw DSM patch + sibling stats. Keep
+# them in the CSV (build_elevation_training_set.py emits them) for
+# diagnostic / future-experiment use only.
 FEATURE_COLUMNS = [
     "col_px",
     "row_px",
@@ -37,11 +46,6 @@ FEATURE_COLUMNS = [
     "patch_max",
     "dsm_z_bilinear",
     "dsm_z_robust",
-    "plane_normal_x",
-    "plane_normal_y",
-    "plane_normal_z",
-    "plane_d",
-    "plane_rms_residual",
     "siblings_z_median",
     "siblings_z_std",
     "meters_per_px",
@@ -55,7 +59,7 @@ FEATURE_COLUMNS = [
 # changes in a way that would invalidate a deployed artifact. The
 # value is stamped into elevation_predictor_meta.json so the loader
 # can surface it via predictor_health().
-MODEL_VERSION = "elevation_predictor_v1"
+MODEL_VERSION = "elevation_predictor_v2"
 
 # Defaults match the spec in the upgrade prompt; train.py CLI flags
 # override them when sweeping hyperparameters.
