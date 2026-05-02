@@ -235,14 +235,47 @@ def _render_context_inset_png(
     plt.close(fig)
 
 
-def _render_plan_view_png(full_mesh: trimesh.Trimesh, out_path: Path) -> None:
-    """Top-down orthographic plan view used on the cover page."""
+def _render_plan_view_png(
+    full_mesh: trimesh.Trimesh,
+    out_path: Path,
+    polygons: dict[int, np.ndarray] | None = None,
+) -> None:
+    """Top-down orthographic plan view used on the cover page.
+
+    Earlier versions iterated ``full_mesh.faces`` and drew each triangle
+    with a stroke, which exposed every earcut interior diagonal as a
+    visible slanted line — making clean panels look fragmented and
+    off-axis. The fix: fill triangles WITHOUT edges so the colour is
+    contiguous, then trace each panel's true boundary polygon on top
+    from ``polygons`` (the original CCW vertex list, no triangulation).
+    """
     fig, ax = plt.subplots(figsize=(7.0, 5.0), dpi=150)
     verts = full_mesh.vertices
+    # Edgeless fills — no more triangulation diagonals leaking into the
+    # final image. Slight alpha keeps overlapping panel fills readable
+    # if any triangles happen to z-fight (rare but defensive).
     for tri in full_mesh.faces:
         poly = verts[tri]
-        ax.fill(poly[:, 0] * M_TO_FT, poly[:, 1] * M_TO_FT,
-                facecolor="#cfe3ff", edgecolor="#003366", linewidth=0.3)
+        ax.fill(
+            poly[:, 0] * M_TO_FT,
+            poly[:, 1] * M_TO_FT,
+            facecolor="#cfe3ff",
+            edgecolor="none",
+        )
+    # Crisp panel boundaries on top. Closed polygon per panel; uses the
+    # boundary verts that came out of polygonization, so the lines match
+    # the eaves / hips / ridges users actually drew.
+    if polygons:
+        for verts_3d in polygons.values():
+            if verts_3d.shape[0] < 2:
+                continue
+            closed = np.vstack([verts_3d, verts_3d[:1]])
+            ax.plot(
+                closed[:, 0] * M_TO_FT,
+                closed[:, 1] * M_TO_FT,
+                color="#003366",
+                linewidth=0.9,
+            )
     ax.set_aspect("equal")
     ax.set_xlabel("east (ft)")
     ax.set_ylabel("north (ft)")
@@ -313,7 +346,7 @@ def write_cutsheets_pdf(
 
         # ---- Cover page ----
         plan_png = tmp_dir / "plan.png"
-        _render_plan_view_png(full_mesh, plan_png)
+        _render_plan_view_png(full_mesh, plan_png, polygons=polygons)
         flowables.append(Paragraph("My Metal Roofer -- Panel Cut Sheets", styles["Title"]))
         flowables.append(Spacer(1, 0.2 * inch))
         flowables.append(Image(str(plan_png), width=6.5 * inch, height=4.6 * inch))
