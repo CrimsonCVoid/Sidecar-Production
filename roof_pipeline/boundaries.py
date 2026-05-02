@@ -154,6 +154,24 @@ def polygons_from_clicks(
             zs_on_plane = (plane.d - nx * xs_m - ny * ys_m) / nz
             verts_proj = np.stack([xs_m, ys_m, zs_on_plane], axis=1)
 
+        # Per-corner z overrides from the labeler's Auto Correct path
+        # (entry.corner_z_overrides). When set, use the user-confirmed z
+        # instead of the plane prediction at that corner. Length is
+        # validated to match corners; None entries are no-ops.
+        overrides = entry.corner_z_overrides
+        if overrides:
+            n_override = 0
+            for i in range(min(len(overrides), verts_proj.shape[0])):
+                v = overrides[i]
+                if v is not None:
+                    verts_proj[i, 2] = float(v)
+                    n_override += 1
+            if n_override:
+                log.info(
+                    "panel %d: applied %d corner_z_overrides from labeler",
+                    pid, n_override,
+                )
+
         polygons[pid] = verts_proj
         log.info("panel %d: %d clicked corners (no contour re-trace)",
                  pid, verts_proj.shape[0])

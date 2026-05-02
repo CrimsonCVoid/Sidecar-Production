@@ -121,12 +121,20 @@ class FlaggedCorner(BaseModel):
     height, which throws off downstream cut sheets. We surface these so
     the labeling UI can highlight them for review. Not an error — the
     save still succeeds.
+
+    `dsm_z` is the raw bilinear sample at the click (often canopy).
+    `suggested_z` is what the system would auto-correct to: the trained
+    elevation predictor when loaded, otherwise the RANSAC plane prediction.
+    The labeler UI's Auto Correct button writes `suggested_z` back as the
+    corner's z override.
     """
 
     panel_id: int
     corner_idx: int
     residual_m: float
-    reason: str  # "canopy" | "plane_outlier"
+    reason: str            # "canopy" | "plane_outlier"
+    dsm_z: float           # raw bilinear DSM sample at the click (m)
+    suggested_z: float     # corrected z the auto-correct path will apply (m)
 
 
 class LabelData(BaseModel):

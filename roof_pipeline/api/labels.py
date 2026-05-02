@@ -48,11 +48,23 @@ def _check_panel_corners(
     the easy cases (corner in a tree); the absolute floor avoids false
     positives on a panel that happens to be very flat (tiny MAD inflates
     the relative threshold).
+
+    Honors a per-panel ``corner_z_overrides`` array (when the labeler's
+    Auto Correct accepted a system suggestion, that corner is taken as
+    user-confirmed and is NOT flagged again on the next save).
     """
     import cv2
 
     h, w = dsm.shape
     flagged: list[FlaggedCorner] = []
+
+    # Optional in-process import. Falls back to plane prediction when the
+    # XGBoost artifact isn't loaded.
+    try:
+        from ..elevation_predictor.predict import predict_corner_z, predictor_available
+    except Exception:
+        predict_corner_z = None  # type: ignore
+        predictor_available = lambda: False  # type: ignore
 
     for panel in panels:
         pid = int(panel.get("id", 0))
@@ -62,6 +74,13 @@ def _check_panel_corners(
         corners_arr = np.asarray(corners, dtype=np.float64)
         cols = corners_arr[:, 0]
         rows = corners_arr[:, 1]
+
+        # Per-corner overrides (length matches corners, missing/null = no override)
+        overrides_raw = panel.get("corner_z_overrides") or []
+        has_override = [
+            i < len(overrides_raw) and overrides_raw[i] is not None
+            for i in range(len(corners))
+        ]
 
         # Rasterize this single panel into a binary mask, then sample DSM
         # over those pixels for the plane fit. Uses the same fillPoly
@@ -84,6 +103,7 @@ def _check_panel_corners(
 
         # Sample DSM at each clicked corner with the canopy-aware sampler,
         # then compare to the plane prediction at that XY.
+        z_dsm_bilinear = _bilinear_sample(dsm, cols, rows)
         z_samples = robust_dsm_sample(dsm, cols, rows)
         nx, ny, nz = plane.normal
         if abs(nz) < 1e-9:
@@ -97,15 +117,62 @@ def _check_panel_corners(
         rel_threshold = mad_k * (mad if mad > 1e-6 else abs_threshold_m)
         threshold = max(abs_threshold_m, rel_threshold)
 
+        # If the trained predictor is loaded, prefer its suggestion; otherwise
+        # fall back to the plane prediction.
+        nn_loaded = bool(predictor_available()) if predict_corner_z else False
+
         for idx, r_signed in enumerate(residuals):
             if abs(r_signed) <= threshold:
                 continue
+            if has_override[idx]:
+                # User already accepted a system suggestion for this corner.
+                # Don't re-nag.
+                continue
             reason = "canopy" if r_signed > 0 else "plane_outlier"
+
+            # Compute suggested_z. Plane prediction is the safe default; the
+            # NN can refine it on tree clicks where sibling-corner stats
+            # carry more signal than the plane fit alone.
+            suggested_z = float(z_plane[idx])
+            if nn_loaded and predict_corner_z is not None:
+                # Build the same feature dict the click-time endpoint uses.
+                siblings = [
+                    float(z_dsm_bilinear[j])
+                    for j in range(len(corners))
+                    if j != idx
+                ]
+                siblings_arr = np.array(siblings) if siblings else np.array([float(z_dsm_bilinear[idx])])
+                feats = {
+                    "col_px": float(cols[idx]),
+                    "row_px": float(rows[idx]),
+                    "panel_corner_count": len(corners),
+                    "patch_mean": float(z_dsm_bilinear[idx]),
+                    "patch_std": float(abs(r_signed)),
+                    "patch_min": float(z_samples[idx]),
+                    "patch_p20": float(z_samples[idx]),
+                    "patch_p50": float(z_dsm_bilinear[idx]),
+                    "patch_p80": float(z_dsm_bilinear[idx]),
+                    "patch_max": float(z_dsm_bilinear[idx]),
+                    "dsm_z_bilinear": float(z_dsm_bilinear[idx]),
+                    "dsm_z_robust": float(z_samples[idx]),
+                    "siblings_z_median": float(np.median(siblings_arr)),
+                    "siblings_z_std": float(np.std(siblings_arr)),
+                    "meters_per_px": res_m,
+                }
+                try:
+                    nn_result = predict_corner_z(feats)
+                except Exception:
+                    nn_result = None
+                if nn_result is not None:
+                    suggested_z = float(nn_result[0])
+
             flagged.append(FlaggedCorner(
                 panel_id=pid,
                 corner_idx=idx,
                 residual_m=float(abs(r_signed)),
                 reason=reason,
+                dsm_z=float(z_dsm_bilinear[idx]),
+                suggested_z=suggested_z,
             ))
 
     return flagged

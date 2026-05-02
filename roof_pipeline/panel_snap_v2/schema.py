@@ -29,6 +29,14 @@ class PanelCorners(BaseModel):
     # shop-drawing PDF uses the user's labels instead of the geometric
     # classifier. Optional and ignored when not present.
     edge_types: list[str] | None = None
+    # Per-corner z override in meters, length matches corners_pix when set.
+    # Populated by the labeler's "Auto Correct" path: when a corner was
+    # flagged as canopy-contaminated, the user can accept the system's
+    # suggested z and we ship that value through to the pipeline so
+    # plane fitting and edge length use the corrected elevation rather
+    # than the raw bilinear DSM read. None inside the array = no
+    # override for that index.
+    corner_z_overrides: list[float | None] | None = None
 
     @field_validator("corners_pix")
     @classmethod
