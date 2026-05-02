@@ -2464,30 +2464,21 @@ def _render_orthographic_views_png(
     *,
     rgb_image: np.ndarray | None = None,
     rgb_res_m: float | None = None,
-    birdseye_views: dict[str, bytes] | None = None,
 ) -> Path | None:
-    """Six-cell composite: AERIAL + 3D plan + four angled ortho views.
+    """Two-cell composite: AERIAL satellite + top-down 3D plan.
 
-    Replaces the standalone 3D-views page that used to live on its own.
-    Each of the four directional cells (N/E/S/W) is rendered as an
-    *angled* orthographic projection (elev=25°) rather than a pure
-    side-on profile. The shallow downward tilt is what makes the roof
-    surface visible at all — at elev=0 you only see the silhouette.
-    Each panel face is colored by sampling the average RGB inside its
-    polygon footprint on the Google Solar imagery, so the contractor
-    sees the actual material color and can match the angled views back
-    to the aerial in column 0.
+    Side-by-side 1×2 layout. Left cell is the Google Solar aerial
+    cropped to the roof bounding box; right cell is the labeler's 3D
+    plan, panels colored by sampling the average RGB from each
+    polygon's footprint on the satellite ortho. Both views are
+    top-down, so dimensions and orientation map directly between them
+    and the contractor can spot label/imagery mismatches at a glance.
 
-    Layout (2 rows × 4 columns):
-        [ aerial   ][ 3D plan ][ N angled ][ E angled ]
-        [ aerial   ][ 3D plan ][ S angled ][ W angled ]
-    AERIAL + 3D-plan each span both rows for visual weight; the four
-    angled views slot into the right two columns.
+    Returns None if no panels have boundary_3d.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     M_TO_FT = 3.280839895
 
@@ -2522,46 +2513,58 @@ def _render_orthographic_views_png(
     mx = pts.max(axis=0)
     span_x_ft = (mx[0] - mn[0]) * M_TO_FT
     span_y_ft = (mx[1] - mn[1]) * M_TO_FT
-    span_z_ft = (mx[2] - mn[2]) * M_TO_FT
-    cx = 0.5 * (mn[0] + mx[0])
-    cy = 0.5 * (mn[1] + mx[1])
-    cz = 0.5 * (mn[2] + mx[2])
-
     pad_x = (mx[0] - mn[0]) * 0.06
     pad_y = (mx[1] - mn[1]) * 0.06
 
-    # Layout (2 rows × 4 columns):
-    #   col 0           col 1           col 2     col 3
-    # [ aerial   ][ 3D plan ][ N elev ][ E elev ]
-    # [ aerial   ][ 3D plan ][ S elev ][ W elev ]
-    # Aerial + 3D-plan each span both rows so they get the dominant
-    # visual weight; elevations slot into the right two columns.
-    fig = plt.figure(figsize=(18, 10), dpi=150)
-    gs = fig.add_gridspec(2, 4, wspace=0.06, hspace=0.10)
+    fig = plt.figure(figsize=(18, 9), dpi=150)
+    gs = fig.add_gridspec(1, 2, wspace=0.06)
 
-    # ---- Cell A (col 0): Google Solar aerial, or mesh fallback ----
+    # ---- Cell A: Google Solar aerial, or mesh-only fallback ----
+    ax_aerial = fig.add_subplot(gs[0, 0])
     if have_rgb:
-        ax_aerial = fig.add_subplot(gs[0:2, 0])
         try:
             cropped = _crop_rgb_to_roof(rgb_image, pts[:, :2], rgb_res_m)
             ax_aerial.imshow(cropped)
             ax_aerial.set_axis_off()
             ax_aerial.set_title("AERIAL (Google Solar imagery)",
-                                fontsize=11, fontweight="bold")
+                                fontsize=12, fontweight="bold")
         except Exception as e:
-            log.warning("AERIAL imshow failed (%s) — falling back to mesh", e)
-            fig.delaxes(ax_aerial)
-            ax_aerial = fig.add_subplot(gs[0:2, 0], projection="3d")
-            have_rgb = False  # mesh fallback handled below
+            log.warning("AERIAL imshow failed (%s) — using plan fallback", e)
+            for verts, fc in zip(tris, face_colors):
+                ax_aerial.fill(
+                    verts[:, 0], verts[:, 1],
+                    facecolor=fc, edgecolor="#222222",
+                    linewidth=0.6, alpha=0.96,
+                )
+            ax_aerial.set_aspect("equal")
+            ax_aerial.set_xlim(mn[0] - pad_x, mx[0] + pad_x)
+            ax_aerial.set_ylim(mn[1] - pad_y, mx[1] + pad_y)
+            ax_aerial.set_axis_off()
+            ax_aerial.set_title(
+                "AERIAL (mesh fallback — no Solar imagery)",
+                fontsize=12, fontweight="bold",
+            )
     else:
-        ax_aerial = fig.add_subplot(gs[0:2, 0], projection="3d")
+        for verts, fc in zip(tris, face_colors):
+            ax_aerial.fill(
+                verts[:, 0], verts[:, 1],
+                facecolor=fc, edgecolor="#222222",
+                linewidth=0.6, alpha=0.96,
+            )
+        ax_aerial.set_aspect("equal")
+        ax_aerial.set_xlim(mn[0] - pad_x, mx[0] + pad_x)
+        ax_aerial.set_ylim(mn[1] - pad_y, mx[1] + pad_y)
+        ax_aerial.set_axis_off()
+        ax_aerial.set_title(
+            "AERIAL (mesh fallback — no Solar imagery)",
+            fontsize=12, fontweight="bold",
+        )
 
-    # ---- Cell B (col 1): 3D mesh top-down (pure 2D plan from XY) ----
-    ax_top = fig.add_subplot(gs[0:2, 1])
+    # ---- Cell B: top-down 3D plan ----
+    ax_top = fig.add_subplot(gs[0, 1])
     for verts, fc in zip(tris, face_colors):
-        poly_xy = verts[:, :2]
         ax_top.fill(
-            poly_xy[:, 0], poly_xy[:, 1],
+            verts[:, 0], verts[:, 1],
             facecolor=fc, edgecolor="#222222", linewidth=0.6, alpha=0.96,
         )
     ax_top.set_aspect("equal")
@@ -2570,10 +2573,10 @@ def _render_orthographic_views_png(
     ax_top.set_axis_off()
     ax_top.set_title(
         f"TOP (3D plan)  —  {span_x_ft:.1f}' × {span_y_ft:.1f}'",
-        fontsize=11, fontweight="bold",
+        fontsize=12, fontweight="bold",
     )
-    # Compass arrow so contractors can orient the 3D plan against the
-    # aerial. North = +Y world axis.
+    # Compass arrow (north = +y world axis) so the plan reads cleanly
+    # next to the aerial.
     ax_top.annotate(
         "N",
         xy=(mx[0] + pad_x * 0.4, mx[1]),
@@ -2582,111 +2585,6 @@ def _render_orthographic_views_png(
         fontsize=10, fontweight="bold",
         arrowprops=dict(arrowstyle="->", color="#444"),
     )
-
-    # ---- Cells C-F (cols 2,3): four orthographic elevations ----
-    # azim picks which direction we look FROM:
-    #   N elev (looking south) -> azim = -90
-    #   S elev (looking north) -> azim =  90
-    #   E elev (looking west)  -> azim = 180
-    #   W elev (looking east)  -> azim =   0
-    ax_n = fig.add_subplot(gs[0, 2], projection="3d")
-    ax_e = fig.add_subplot(gs[0, 3], projection="3d")
-    ax_s = fig.add_subplot(gs[1, 2], projection="3d")
-    ax_w = fig.add_subplot(gs[1, 3], projection="3d")
-
-    def populate_elev(ax, azim: float, title: str) -> None:
-        for verts, fc in zip(tris, face_colors):
-            pc = Poly3DCollection(
-                [verts], facecolor=fc, edgecolor="#222", linewidth=0.4, alpha=0.97,
-            )
-            ax.add_collection3d(pc)
-        hx = 0.5 * (mx[0] - mn[0]) * 1.10
-        hy = 0.5 * (mx[1] - mn[1]) * 1.10
-        hz = 0.5 * (mx[2] - mn[2]) * 1.10
-        ax.set_xlim(cx - hx, cx + hx)
-        ax.set_ylim(cy - hy, cy + hy)
-        ax.set_zlim(cz - hz, cz + hz)
-        try:
-            ax.set_box_aspect((hx, hy, hz))
-        except Exception:
-            pass
-        try:
-            ax.set_proj_type("ortho")
-        except Exception:
-            pass
-        ax.set_axis_off()
-        # 25° downward tilt: enough to reveal each face's slope and the
-        # satellite-sampled color, without distorting horizontal runs
-        # so much that the view loses its orthographic feel.
-        ax.view_init(elev=25.0, azim=azim)
-        ax.set_title(title, fontsize=10, fontweight="bold")
-
-    # If RGB wasn't available, paint the aerial cell with a mesh
-    # top-down so the page still has all six cells.
-    if not have_rgb:
-        for verts, fc in zip(tris, face_colors):
-            pc = Poly3DCollection(
-                [verts], facecolor=fc, edgecolor="#222",
-                linewidth=0.5, alpha=0.97,
-            )
-            ax_aerial.add_collection3d(pc)
-        hx = 0.5 * (mx[0] - mn[0]) * 1.05
-        hy = 0.5 * (mx[1] - mn[1]) * 1.05
-        hz = 0.5 * (mx[2] - mn[2]) * 1.05
-        ax_aerial.set_xlim(cx - hx, cx + hx)
-        ax_aerial.set_ylim(cy - hy, cy + hy)
-        ax_aerial.set_zlim(cz - hz, cz + hz)
-        try:
-            ax_aerial.set_box_aspect((hx, hy, hz))
-        except Exception:
-            pass
-        try:
-            ax_aerial.set_proj_type("ortho")
-        except Exception:
-            pass
-        ax_aerial.set_axis_off()
-        ax_aerial.view_init(elev=90.0, azim=-90.0)
-        ax_aerial.set_title(
-            "AERIAL (mesh fallback — no Solar imagery)",
-            fontsize=11, fontweight="bold",
-        )
-
-    # Per-cell choice: Bird's Eye oblique photo if Bing returned coverage
-    # for that direction, otherwise the 3D-mesh fallback. The mapping
-    # below pairs each axis in the figure with the title we'd show, the
-    # azimuth for the mesh fallback, and the Bing label that would
-    # supply a real photo for the same viewing direction.
-    cells = [
-        (ax_n, gs[0, 2], "LOOKING SOUTH", -90.0, "looking_south"),
-        (ax_s, gs[1, 2], "LOOKING NORTH",  90.0, "looking_north"),
-        (ax_e, gs[0, 3], "LOOKING WEST",    0.0, "looking_west"),
-        (ax_w, gs[1, 3], "LOOKING EAST",  180.0, "looking_east"),
-    ]
-    for ax, slot, title, azim, label in cells:
-        photo_bytes = (birdseye_views or {}).get(label)
-        if photo_bytes:
-            # Swap the pre-created 3D subplot for a 2D image axis at
-            # the same grid slot. `imshow` doesn't work on a 3D axes.
-            try:
-                from io import BytesIO
-                from PIL import Image
-                img = Image.open(BytesIO(photo_bytes)).convert("RGB")
-                fig.delaxes(ax)
-                ax_photo = fig.add_subplot(slot)
-                ax_photo.imshow(img)
-                ax_photo.set_axis_off()
-                ax_photo.set_title(
-                    f"{title} (Bing Bird's Eye)",
-                    fontsize=10, fontweight="bold",
-                )
-                continue
-            except Exception as e:
-                # Bad payload or PIL hiccup — fall through to mesh.
-                log.warning(
-                    "birdseye photo decode failed for %s (%s) — using mesh",
-                    label, e,
-                )
-        populate_elev(ax, azim=azim, title=title)
 
     fd, tmp = tempfile.mkstemp(suffix=".png")
     import os
@@ -2727,9 +2625,9 @@ def _render_page_orthographic_views(
     c.setFillColor(colors.HexColor("#666666"))
     c.drawString(
         40, page_h - 64,
-        "Top-down satellite + 3D plan, then four angled (25° tilt) "
-        "orthographic views. Each panel face is colored from the "
-        "Google Solar imagery so the view matches the aerial.",
+        "Side-by-side: Google Solar aerial on the left, top-down 3D "
+        "plan on the right. Panel colors on the plan are sampled from "
+        "the satellite ortho so the two views read as the same roof.",
     )
     c.setFillColor(colors.black)
 
@@ -2741,13 +2639,11 @@ def _render_page_orthographic_views(
 
     rgb_image = roof.get("rgb_image")
     rgb_res_m = roof.get("rgb_res_m")
-    birdseye_views = roof.get("birdseye_views")
     try:
         png_path = _render_orthographic_views_png(
             panels,
             rgb_image=rgb_image,
             rgb_res_m=rgb_res_m,
-            birdseye_views=birdseye_views,
         )
     except Exception as e:
         log.warning("page ORTHO: skipping render (%s)", e)

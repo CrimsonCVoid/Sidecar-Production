@@ -73,7 +73,6 @@ def run_pipeline(
     profile: str = "SV",
     waste_pct: float = 11.0,
     rgb_bytes: bytes | None = None,
-    birdseye_views: dict[str, bytes] | None = None,
 ) -> dict[str, Path]:
     """Execute the full roof pipeline on pre-loaded data arrays.
 
@@ -260,7 +259,7 @@ def run_pipeline(
     }
     # Decode RGB ortho if provided. Used by the orthographic-views page
     # to show the actual Google Solar imagery in the AERIAL cell and to
-    # color each panel face in the four angled views with the average
+    # color each panel polygon in the top-down 3D plan with the average
     # RGB sampled from the panel's footprint on the ortho.
     rgb_image: np.ndarray | None = None
     if rgb_bytes is not None:
@@ -284,11 +283,6 @@ def run_pipeline(
     if rgb_image is not None:
         roof_dict["rgb_image"] = rgb_image
         roof_dict["rgb_res_m"] = res_m
-    # Bird's Eye photos (if any). Stored raw — shop_drawings decodes
-    # via Pillow at render time. Empty dict / None just falls through to
-    # the 3D-mesh fallback per direction.
-    if birdseye_views:
-        roof_dict["birdseye_views"] = dict(birdseye_views)
     shop_pdf_path = generate_shop_drawings(
         roof_dict, out_dir / "shop_drawings.pdf",
     )
