@@ -845,14 +845,27 @@ def _render_page1(
         panel_outline_world.append(outline)
 
         plane_normal = np.asarray(panel.get("plane_normal", [0, 0, 1]), dtype=float)
-        nx, ny = float(plane_normal[0]), float(plane_normal[1])
-        horiz = math.hypot(nx, ny)
-        run_dir = (np.array([-nx, -ny]) / horiz) if horiz > 1e-9 else np.array([1.0, 0.0])
-        panel_run_axis.append(run_dir)
+        # Pull the per-edge type list out of the panel's edges array so
+        # the resolver can prefer the labeler's eave annotation when present.
+        panel_edge_types = [str(e.get("type", "")) for e in panel.get("edges", [])]
+        plane_residual = panel.get("plane_residual_m")
+        installer_start_edge = panel.get("installer_start_edge")
 
-        polys, lengths = _scan_line_sheets(outline, plane_normal, coverage_ft)
+        polys, lengths, run_dir, source = _scan_line_sheets(
+            outline,
+            plane_normal,
+            coverage_ft,
+            edge_types=panel_edge_types or None,
+            plane_residual_m=plane_residual,
+            installer_start_edge=installer_start_edge,
+        )
+        panel_run_axis.append(run_dir)
         panel_sheet_polys.append(polys)
         panel_sheet_lengths.append(lengths)
+        log.info(
+            "panel %s: run_dir source=%s, %d sheets",
+            panel.get("panel_id", idx), source, len(polys),
+        )
 
     # Pass 1: panel fills + clipped panels (semi-transparent)
     sheet_running_id = 0
@@ -1019,37 +1032,284 @@ def _render_page1(
     c.setFillColor(colors.black)
 
 
+# ---------------------------------------------------------------------------
+# Run-direction resolution (Fixes 1, 2, 3, 5, 6, 7)
+# ---------------------------------------------------------------------------
+# Sheet orientation used to be a single line that read the plane gradient
+# and called it a day. That breaks on:
+#   - low-slope or noisy plane fits where the gradient is unstable
+#   - faces where the labeler explicitly tagged the eave but the plane
+#     fit is slightly off, so the gradient and the eave disagree
+#   - long / curved faces where a single fitted plane is the wrong model
+# This block introduces a priority chain (eave label > gradient > longest
+# polygon edge) plus a sub-degree snap to the dominant polygon edge so
+# the visible sheet stack lines up with the roof rake the way an
+# installer expects.
+
+LOW_SLOPE_PITCH_DEG = 7.0   # below this we don't trust the gradient
+SNAP_TO_EDGE_DEG = 3.0       # snap run_dir to longest_edge_perp if within
+HIGH_RESIDUAL_M = 0.20       # plane RANSAC residual above which gradient is demoted
+LONG_FACE_ASPECT = 5.0       # plan-view aspect ratio that flags a face as "split me"
+
+
+def _length_weighted_bearing(
+    polygon_xy: np.ndarray,
+    edge_types: list[str],
+    target_type: str,
+) -> float | None:
+    """Length-weighted circular mean bearing of edges with a given type.
+
+    Returns an angle in [0, π) — bearing is direction-less (a line, not
+    a vector). None when no edges of that type exist.
+
+    Why circular-mean over arithmetic-mean: an eave that wraps across
+    horizontal can have edge angles like 1° and 179°, which average to
+    90° (perpendicular!) instead of ~0° (the actual eave line). We map
+    angles to 2θ on the unit circle, average, then halve back. Length
+    weighting protects against a 6-inch dormer stub outvoting a 30-foot
+    main eave.
+    """
+    n = len(polygon_xy)
+    if n < 2 or len(edge_types) != n:
+        return None
+    sx, sy = 0.0, 0.0
+    total_w = 0.0
+    for i in range(n):
+        if str(edge_types[i]).upper() != target_type.upper():
+            continue
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        d = b - a
+        L = float(math.hypot(d[0], d[1]))
+        if L < 1e-9:
+            continue
+        theta = math.atan2(float(d[1]), float(d[0])) % math.pi
+        sx += L * math.cos(2 * theta)
+        sy += L * math.sin(2 * theta)
+        total_w += L
+    if total_w < 1e-9 or (abs(sx) < 1e-9 and abs(sy) < 1e-9):
+        return None
+    return (math.atan2(sy, sx) / 2.0) % math.pi
+
+
+def _length_weighted_centroid(
+    polygon_xy: np.ndarray,
+    edge_types: list[str],
+    target_type: str,
+) -> np.ndarray | None:
+    """Length-weighted midpoint of edges of a given type. Used to pick the
+    sign of the down-slope perpendicular: from the polygon centroid,
+    run_dir points TOWARD this centroid (water flows toward the eave)."""
+    n = len(polygon_xy)
+    if n < 2 or len(edge_types) != n:
+        return None
+    acc = np.zeros(2)
+    total_w = 0.0
+    for i in range(n):
+        if str(edge_types[i]).upper() != target_type.upper():
+            continue
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        L = float(np.linalg.norm(b - a))
+        if L < 1e-9:
+            continue
+        mid = 0.5 * (a + b)
+        acc += L * mid
+        total_w += L
+    if total_w < 1e-9:
+        return None
+    return acc / total_w
+
+
+def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | None:
+    """Return (perpendicular_unit, edge_length) for the longest polygon edge.
+
+    The perpendicular is a 2D unit vector orthogonal to the longest edge,
+    flipped so its dot with the polygon's outward normal is positive
+    (which on a convex-ish face points away from the centroid). Used as
+    the flat-roof fallback for run direction and as the snap target
+    after every other strategy.
+    """
+    n = polygon_xy.shape[0]
+    if n < 2:
+        return None
+    best_len = 0.0
+    best_dir = np.array([1.0, 0.0])
+    for i in range(n):
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        d = b - a
+        L = float(math.hypot(d[0], d[1]))
+        if L > best_len:
+            best_len = L
+            best_dir = d / L
+    perp = np.array([-best_dir[1], best_dir[0]])
+    return perp, best_len
+
+
+def _resolve_run_direction(
+    polygon_xy: np.ndarray,
+    plane_normal: np.ndarray,
+    *,
+    edge_types: list[str] | None = None,
+    plane_residual_m: float | None = None,
+    snap_deg: float = SNAP_TO_EDGE_DEG,
+    low_slope_pitch_deg: float = LOW_SLOPE_PITCH_DEG,
+    high_residual_m: float = HIGH_RESIDUAL_M,
+) -> tuple[np.ndarray, str]:
+    """Pick the down-slope run direction. Returns (unit_xy, source_tag).
+
+    Strategy chain, first hit wins:
+      1. ``eave_label`` — length-weighted eave bearing (Fix 1, 2). Run
+         is perpendicular to the eave, oriented toward the eave centroid.
+      2. ``gradient`` — plane-normal projection. Skipped if the plane
+         is below the low-slope threshold (Fix 3) OR the RANSAC
+         residual is above ``high_residual_m`` (Fix 7).
+      3. ``longest_edge`` — perpendicular to the longest polygon edge.
+         The flat-roof / no-info fallback.
+
+    After picking a direction, if it lies within ``snap_deg`` of the
+    longest-edge perpendicular AND we didn't already pick that, snap
+    to the edge perpendicular (Fix 5) and tag the source with ``_snapped``.
+    """
+    polygon_xy = np.asarray(polygon_xy, dtype=float)[:, :2]
+
+    chosen: np.ndarray | None = None
+    source = "unknown"
+
+    # 1. Eave label
+    if edge_types and len(edge_types) == polygon_xy.shape[0]:
+        bearing = _length_weighted_bearing(polygon_xy, edge_types, "EAVE")
+        eave_centroid = _length_weighted_centroid(polygon_xy, edge_types, "EAVE")
+        if bearing is not None and eave_centroid is not None:
+            # Run direction is perpendicular to the eave bearing, pointing
+            # toward the eave from the polygon centroid.
+            perp_a = np.array([math.cos(bearing + math.pi / 2),
+                               math.sin(bearing + math.pi / 2)])
+            face_centroid = polygon_xy.mean(axis=0)
+            toward_eave = eave_centroid - face_centroid
+            chosen = perp_a if float(perp_a @ toward_eave) > 0 else -perp_a
+            source = "eave_label"
+
+    # 2. Plane gradient (only if pitch is meaningful and plane fit isn't noisy)
+    if chosen is None:
+        nx, ny, nz = float(plane_normal[0]), float(plane_normal[1]), float(plane_normal[2])
+        pitch_from_vertical_deg = math.degrees(math.acos(max(-1.0, min(1.0, abs(nz)))))
+        residual_too_high = (
+            plane_residual_m is not None and plane_residual_m > high_residual_m
+        )
+        horiz = math.hypot(nx, ny)
+        if (
+            pitch_from_vertical_deg >= low_slope_pitch_deg
+            and not residual_too_high
+            and horiz > 1e-9
+        ):
+            chosen = -np.array([nx, ny]) / horiz
+            source = "gradient"
+
+    # 3. Longest-edge perpendicular fallback
+    if chosen is None:
+        edge = _longest_edge_perp(polygon_xy)
+        if edge is None:
+            return np.array([1.0, 0.0]), "default_axis"
+        chosen, _ = edge
+        # Sign: point from centroid outward via the longer-perp side
+        face_centroid = polygon_xy.mean(axis=0)
+        # Use the direction the polygon extends most along chosen
+        proj = (polygon_xy - face_centroid) @ chosen
+        if proj.max() < -proj.min():
+            chosen = -chosen
+        if plane_residual_m is not None and plane_residual_m > high_residual_m:
+            source = "longest_edge_high_residual"
+        else:
+            source = "longest_edge_flat"
+
+    # 5. Snap to longest-edge perp when we're within snap_deg of it
+    edge = _longest_edge_perp(polygon_xy)
+    if edge is not None:
+        edge_perp, _ = edge
+        # Direction-less alignment: |cos(angle)|, snap if angle ≤ snap_deg
+        cos_aligned = abs(float(np.clip(chosen @ edge_perp, -1.0, 1.0)))
+        ang_deg = math.degrees(math.acos(cos_aligned))
+        if ang_deg < snap_deg and not source.startswith("longest_edge"):
+            # Preserve our chosen direction's sign (down-slope) when snapping
+            if float(chosen @ edge_perp) < 0:
+                edge_perp = -edge_perp
+            chosen = edge_perp
+            source = source + "_snapped"
+
+    norm = float(np.linalg.norm(chosen))
+    if norm < 1e-9:
+        return np.array([1.0, 0.0]), "default_axis"
+    return chosen / norm, source
+
+
+def _detect_face_split_candidate(
+    polygon_xy: np.ndarray,
+    plane_residual_m: float | None,
+) -> str | None:
+    """Heuristic: returns a non-None tag when this face probably shouldn't be
+    a single plane. Logged as a warning today; the actual split algorithm
+    is a follow-up. Returns one of:
+      "high_residual" — RANSAC inlier residual exceeds HIGH_RESIDUAL_M
+      "long_aspect"   — plan-view aspect ratio exceeds LONG_FACE_ASPECT
+      None            — face looks fine
+    """
+    if plane_residual_m is not None and plane_residual_m > HIGH_RESIDUAL_M:
+        return "high_residual"
+    n = polygon_xy.shape[0]
+    if n >= 3:
+        # PCA-ish principal axes via covariance — gives a robust aspect
+        # ratio without depending on which edge happens to be longest.
+        centered = polygon_xy[:, :2] - polygon_xy[:, :2].mean(axis=0)
+        cov = (centered.T @ centered) / max(1, len(centered) - 1)
+        try:
+            eigvals = np.linalg.eigvalsh(cov)
+            eigvals = np.sort(np.abs(eigvals))
+            if eigvals[0] > 1e-9:
+                aspect = float(math.sqrt(eigvals[1] / eigvals[0]))
+                if aspect > LONG_FACE_ASPECT:
+                    return "long_aspect"
+        except np.linalg.LinAlgError:
+            pass
+    return None
+
+
 def _scan_line_sheets(
     outline_world: np.ndarray,
     plane_normal: np.ndarray,
     coverage_ft: float,
-) -> tuple[list[np.ndarray], list[float]]:
-    """Lay panels by sweeping a coverage-wide strip across the panel.
+    *,
+    edge_types: list[str] | None = None,
+    plane_residual_m: float | None = None,
+    installer_start_edge: str | None = None,
+) -> tuple[list[np.ndarray], list[float], np.ndarray, str]:
+    """Lay panels by sweeping a coverage-wide strip across the face.
 
     For each strip position perp_lo .. perp_lo + coverage along the
-    cross-slope axis, clip the panel polygon to that strip. The
-    resulting (possibly trapezoidal) polygon IS the panel's plan-view
-    shape -- so panels never poke outside the panel, and trapezoidal
-    hip faces get correctly tapered end panels.
+    cross-slope axis, clip the face polygon to that strip. The
+    resulting (possibly trapezoidal) polygon IS the sheet's plan-view
+    shape -- so sheets never poke outside the face, and trapezoidal
+    hip faces get correctly tapered end sheets.
 
-    Returns (clipped_polys_world_xy, sheet_length_ft_list). Panel length
-    is the run extent of each clipped polygon, converted from plan-view
-    feet to slope (true-length) feet via 1 / cos(theta).
+    Returns ``(clipped_polys_world_xy, sheet_length_ft_list, run_dir,
+    source_tag)``. ``run_dir`` and ``source_tag`` are returned so the
+    caller can label the page and emit telemetry about which strategy
+    won (eave_label, gradient, longest_edge_*).
     """
     M_TO_FT = 3.280839895
     if outline_world.shape[0] < 3:
-        return [], []
+        return [], [], np.array([1.0, 0.0]), "empty"
 
-    # Run dir = down-slope horizontal direction. Perp dir = orthogonal in plan.
-    nx, ny, nz = plane_normal
-    horiz = math.hypot(float(nx), float(ny))
-    if horiz < 1e-9:
-        run_dir = np.array([1.0, 0.0])
-    else:
-        run_dir = -np.array([float(nx), float(ny)]) / horiz
+    run_dir, source = _resolve_run_direction(
+        outline_world,
+        plane_normal,
+        edge_types=edge_types,
+        plane_residual_m=plane_residual_m,
+    )
     perp_dir = np.array([-run_dir[1], run_dir[0]])
 
-    cos_theta = abs(float(nz))
+    cos_theta = abs(float(plane_normal[2]))
     if cos_theta < 1e-6:
         cos_theta = 1.0
 
@@ -1062,11 +1322,42 @@ def _scan_line_sheets(
     perp_min, perp_max = float(perp_proj.min()), float(perp_proj.max())
     perp_span = perp_max - perp_min
     if perp_span <= 0:
-        return [], []
+        return [], [], run_dir, source
 
     n_panels = max(1, int(math.ceil(perp_span / coverage_world)))
-    # Centre the strip stack so any overhang is split evenly on both sides.
-    start_perp = perp_min - max(0.0, (n_panels * coverage_world - perp_span) / 2.0)
+
+    # Sheet stack origin. Default = centered (overhang split evenly on
+    # both sides). When the installer convention says start from a
+    # specific side (Fix 10), drop the centering so the first sheet
+    # aligns with that rake.
+    if installer_start_edge:
+        side = installer_start_edge.strip().lower()
+        # Identify which end of perp_proj corresponds to which compass
+        # direction. perp_dir is in world XY where +x is east, +y is north.
+        # The endpoint with larger dot(perp_dir, [side_unit_vec]) is on
+        # that side.
+        side_vec = {
+            "east":  np.array([1.0, 0.0]),
+            "west":  np.array([-1.0, 0.0]),
+            "north": np.array([0.0, 1.0]),
+            "south": np.array([0.0, -1.0]),
+        }.get(side)
+        if side_vec is not None:
+            if float(perp_dir @ side_vec) >= 0:
+                # perp_dir points to that side → start from perp_min
+                start_perp = perp_min
+            else:
+                # perp_dir points away → start from perp_max - n*cov
+                start_perp = perp_max - n_panels * coverage_world
+            source = source + "_installer_start"
+        else:
+            start_perp = perp_min - max(
+                0.0, (n_panels * coverage_world - perp_span) / 2.0
+            )
+    else:
+        start_perp = perp_min - max(
+            0.0, (n_panels * coverage_world - perp_span) / 2.0
+        )
 
     polys: list[np.ndarray] = []
     lengths: list[float] = []
@@ -1082,7 +1373,7 @@ def _scan_line_sheets(
         length_ft = run_extent_world * M_TO_FT / cos_theta
         polys.append(clipped)
         lengths.append(length_ft)
-    return polys, lengths
+    return polys, lengths, run_dir, source
 
 
 def _draw_sheet_length_label(
@@ -2974,25 +3265,27 @@ def _layout_sheets(
     polygon: np.ndarray,
     plane: Plane,
     coverage_ft: float,
-) -> list[dict]:
-    """Generate metal-panel records for one panel using scan-line clipping.
+    *,
+    edge_types: list[str] | None = None,
+    installer_start_edge: str | None = None,
+) -> tuple[list[dict], np.ndarray, str]:
+    """Generate metal-sheet records for one face using scan-line clipping.
 
-    Sweeps a coverage-wide strip perpendicular to the slope across the
-    panel polygon. Each clipped strip's run extent (converted to slope
-    length) is the panel length. This gives correct trimmed lengths on
-    trapezoidal hip faces -- panels at corners come out shorter than
-    panels in the middle, matching what the fabricator actually cuts.
+    Returns ``(records, run_dir_xy, source_tag)``. ``records`` is the
+    list of {sheet_id, length_ft, run_direction} dicts the cut-list
+    page consumes. ``run_dir_xy`` and ``source_tag`` are bubbled up so
+    the page renderer can label the page consistently and the caller
+    can stash the source on the panel dict for telemetry.
     """
-    # Down-slope horizontal direction = -horizontal projection of normal
-    nx, ny, _nz = plane.normal
-    horiz = math.hypot(nx, ny)
-    if horiz < 1e-9:
-        run_dir = np.array([1.0, 0.0])
-    else:
-        run_dir = -np.array([nx, ny]) / horiz
-
-    polys_clip, lengths_ft = _scan_line_sheets(polygon[:, :2], plane.normal, coverage_ft)
-    return [
+    polys_clip, lengths_ft, run_dir, source = _scan_line_sheets(
+        polygon[:, :2],
+        plane.normal,
+        coverage_ft,
+        edge_types=edge_types,
+        plane_residual_m=getattr(plane, "rms_residual", None),
+        installer_start_edge=installer_start_edge,
+    )
+    records = [
         {
             "sheet_id": i + 1,
             "length_ft": round(length, 3),
@@ -3000,6 +3293,7 @@ def _layout_sheets(
         }
         for i, length in enumerate(lengths_ft)
     ]
+    return records, run_dir, source
 
 
 def roof_dict_from_pipeline(
@@ -3009,6 +3303,7 @@ def roof_dict_from_pipeline(
     coverage_width_in: float = 24.0,
     waste_pct: float = 11.0,
     profile: str = "SV",
+    installer_start_edge: str | None = None,
 ) -> dict:
     """Convert pipeline outputs into the ``roof`` dict shape consumed by
     ``generate_shop_drawings``.
@@ -3141,13 +3436,44 @@ def roof_dict_from_pipeline(
         cleaned_poly = np.array(kept_verts)
         boundary_3d = [[float(x), float(y), float(z)] for x, y, z in cleaned_poly]
         centroid = cleaned_poly.mean(axis=0)
+
+        # Fix 9 (detect-only): warn when this face looks like it should
+        # have been split. The actual splitting algorithm is a follow-up;
+        # right now we just log and proceed with the (uncertain) plane.
+        split_tag = _detect_face_split_candidate(
+            cleaned_poly[:, :2],
+            getattr(plane, "rms_residual", None),
+        )
+        if split_tag is not None:
+            log.warning(
+                "panel %d: face flagged as split-candidate (%s, residual=%.3fm)",
+                pid, split_tag, getattr(plane, "rms_residual", 0.0),
+            )
+
+        sheet_records, run_dir_xy, source = _layout_sheets(
+            cleaned_poly,
+            plane,
+            coverage_ft,
+            edge_types=kept_types,
+            installer_start_edge=installer_start_edge,
+        )
+        log.info(
+            "panel %d: run_dir source=%s, %d sheets, residual=%.3fm",
+            pid, source, len(sheet_records),
+            getattr(plane, "rms_residual", 0.0) or 0.0,
+        )
+
         panels.append({
             "panel_id": f"panel_{pid}",
             "plane_normal": [float(x) for x in plane.normal],
             "plane_centroid": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
+            "plane_residual_m": float(getattr(plane, "rms_residual", 0.0) or 0.0),
             "boundary_3d": boundary_3d,
             "edges": edges,
-            "sheets": _layout_sheets(cleaned_poly, plane, coverage_ft),
+            "sheets": sheet_records,
+            "run_dir_source": source,
+            "split_candidate": split_tag,
+            "installer_start_edge": installer_start_edge,
         })
 
     return {

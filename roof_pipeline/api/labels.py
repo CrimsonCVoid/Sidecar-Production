@@ -21,7 +21,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import Client
 
-from ..boundaries import _bilinear_sample, robust_dsm_sample
+from ..boundaries import _bilinear_sample, buffered_panel_mask, robust_dsm_sample
 from ..planes import fit_plane_ransac
 from .config import Settings
 from .deps import Principal, get_settings, get_supabase, require_principal, verify_sample_access
@@ -53,8 +53,6 @@ def _check_panel_corners(
     Auto Correct accepted a system suggestion, that corner is taken as
     user-confirmed and is NOT flagged again on the next save).
     """
-    import cv2
-
     h, w = dsm.shape
     flagged: list[FlaggedCorner] = []
 
@@ -82,11 +80,9 @@ def _check_panel_corners(
             for i in range(len(corners))
         ]
 
-        # Rasterize this single panel into a binary mask, then sample DSM
-        # over those pixels for the plane fit. Uses the same fillPoly
-        # pattern as api/pipeline.py.
-        mask = np.zeros((h, w), dtype=np.uint8)
-        cv2.fillPoly(mask, [corners_arr.astype(np.int32)], 1)
+        # Rasterize this single panel and erode inward by 30 cm so the
+        # plane fit ignores ridge-cap / gutter / adjacent-face bleed.
+        mask = buffered_panel_mask(corners_arr, (h, w), res_m, buffer_m=0.30)
         rs, cs = np.where(mask == 1)
         if rs.size < 12:
             continue

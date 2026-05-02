@@ -36,6 +36,48 @@ def _bilinear_sample(grid: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.nda
     )
 
 
+def buffered_panel_mask(
+    corners_pix: np.ndarray,
+    shape: tuple[int, int],
+    res_m: float,
+    *,
+    buffer_m: float = 0.30,
+) -> np.ndarray:
+    """Rasterize a polygon, then erode inward by ``buffer_m`` meters.
+
+    Why: when we sample DSM heights for a roof-plane RANSAC fit, pixels
+    near the polygon edge are usually contaminated — the rasterized
+    polygon catches ridge cap (taller than the plane), gutter overhang
+    (shorter than the plane), and bleed from the adjacent face on
+    shared edges. Eroding 30 cm inward keeps only "interior" pixels
+    that are unambiguously this face, so RANSAC fits the plane the
+    contractor actually cuts to.
+
+    ``shape`` is (h, w). ``corners_pix`` is (N, 2) in (col, row) order.
+    """
+    import cv2
+
+    h, w = shape
+    mask = np.zeros((h, w), dtype=np.uint8)
+    if corners_pix.shape[0] < 3:
+        return mask
+    cv2.fillPoly(mask, [corners_pix.astype(np.int32)], 1)
+    if buffer_m <= 0.0 or res_m <= 0.0:
+        return mask
+    buffer_px = max(1, int(round(buffer_m / res_m)))
+    if buffer_px <= 0:
+        return mask
+    # 3x3 cross is enough; iterate to grow the erosion radius. Faster
+    # and cleaner than building a single huge kernel.
+    kernel = np.ones((3, 3), np.uint8)
+    eroded = cv2.erode(mask, kernel, iterations=buffer_px)
+    # If the panel is so small that erosion wipes it out, fall back to
+    # the un-eroded mask — better an imperfect plane fit than none.
+    if eroded.sum() < 12:
+        return mask
+    return eroded
+
+
 def robust_dsm_sample(
     dsm: np.ndarray,
     xs: np.ndarray,

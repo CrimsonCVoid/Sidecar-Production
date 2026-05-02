@@ -119,6 +119,7 @@ def fit_all_panels(
     mask: np.ndarray,
     res_m: float,
     use_ransac: bool = True,
+    buffer_m: float = 0.30,
 ) -> dict[int, Plane]:
     """Fit one plane per nonzero panel ID in the mask.
 
@@ -136,7 +137,23 @@ def fit_all_panels(
     panel_ids = [int(i) for i in np.unique(mask) if i != 0]
 
     for pid in panel_ids:
-        rows, cols = np.where(mask == pid)
+        # Erode each panel inward by buffer_m before selecting pixels for
+        # the plane fit. Cuts out ridge-cap, gutter, and adjacent-face
+        # bleed at the boundary that would otherwise tilt the RANSAC
+        # normal. Falls back to the un-eroded mask when the panel is
+        # so small that erosion wipes it out.
+        panel_mask = (mask == pid).astype(np.uint8)
+        if buffer_m > 0.0 and res_m > 0.0:
+            try:
+                import cv2
+                buffer_px = max(1, int(round(buffer_m / res_m)))
+                kernel = np.ones((3, 3), np.uint8)
+                eroded = cv2.erode(panel_mask, kernel, iterations=buffer_px)
+                if int(eroded.sum()) >= 12:
+                    panel_mask = eroded
+            except Exception as exc:
+                log.warning("panel %d: buffer-erosion failed (%s)", pid, exc)
+        rows, cols = np.where(panel_mask == 1)
         if rows.size < 3:
             log.warning("panel %d has %d pixels, skipping", pid, rows.size)
             continue

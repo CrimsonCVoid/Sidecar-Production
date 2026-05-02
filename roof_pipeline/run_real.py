@@ -73,6 +73,7 @@ def run_pipeline(
     profile: str = "SV",
     waste_pct: float = 11.0,
     rgb_bytes: bytes | None = None,
+    installer_start_edge: str | None = None,
 ) -> dict[str, Path]:
     """Execute the full roof pipeline on pre-loaded data arrays.
 
@@ -279,6 +280,7 @@ def run_pipeline(
         coverage_width_in=coverage_in,
         waste_pct=waste_pct,
         profile=profile,
+        installer_start_edge=installer_start_edge,
     )
     if rgb_image is not None:
         roof_dict["rgb_image"] = rgb_image
