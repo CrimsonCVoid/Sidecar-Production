@@ -35,6 +35,27 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _fetch_rgb_bytes(supabase: Client, settings: Settings, rgb_storage_path: str | None) -> bytes | None:
+    """Best-effort download of the RGB GeoTIFF for a sample.
+
+    Used to color the orthographic / 3D-views pages of the cut-sheet PDF
+    with the actual Google Solar imagery instead of falling back to a
+    bare mesh wireframe. Failures are non-fatal — the pipeline still
+    runs, the PDF just loses the AERIAL cell.
+    """
+    if not rgb_storage_path:
+        return None
+    for bucket in [settings.training_bucket, settings.storage_bucket]:
+        try:
+            data = supabase.storage.from_(bucket).download(rgb_storage_path)
+            if data:
+                return data
+        except Exception:
+            continue
+    log.warning("rgb GeoTIFF not found in any bucket for path %s", rgb_storage_path)
+    return None
+
+
 # ---- Content type mapping for Supabase Storage uploads (D-13) ----
 _CONTENT_TYPES: dict[str, str] = {
     ".obj": "model/obj",
@@ -157,6 +178,13 @@ async def _run_pipeline_bg(
             dsm, res_m = _load_dsm(dsm_local)
             mask_arr = np.load(mask_local).astype(np.uint8)
 
+            # Pull the RGB GeoTIFF too so the orthographic / 3D-views
+            # pages of the shop-drawings PDF render with Google Solar
+            # imagery. None on failure → mesh fallback (still works).
+            rgb_bytes = _fetch_rgb_bytes(
+                supabase, settings, sample.get("rgb_storage_path"),
+            )
+
             # Run pipeline in thread to avoid blocking event loop (D-12)
             out_dir = tmp_path / "output"
             output_paths = await asyncio.to_thread(
@@ -174,6 +202,7 @@ async def _run_pipeline_bg(
                 coverage_in=request_body.coverage_in,
                 profile=request_body.profile,
                 waste_pct=request_body.waste_pct,
+                rgb_bytes=rgb_bytes,
             )
 
             _update_status(supabase, run_id, status="running", stage_name="uploading", progress_pct=90)
@@ -416,7 +445,10 @@ async def generate_pdf(
     # 2. Get sample info
     sample_result = (
         supabase.table("training_samples")
-        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
+        .select(
+            "dsm_storage_path, rgb_storage_path, formatted_address, "
+            "source_address, meters_per_px"
+        )
         .eq("id", sample_id)
         .execute()
     )
@@ -475,6 +507,12 @@ async def generate_pdf(
         # Load DSM array
         dsm_arr, actual_res = _load_dsm(dsm_local)
 
+        # Best-effort RGB ortho download for the cut-sheet PDF's
+        # orthographic / 3D-views aerial cell.
+        rgb_bytes = _fetch_rgb_bytes(
+            supabase, settings, sample.get("rgb_storage_path"),
+        )
+
         out_dir = tmp_path / "output"
 
         log.info("generating PDF for sample %s (%d panels)", sample_id, len(panels))
@@ -490,6 +528,7 @@ async def generate_pdf(
             project_name=address,
             project_address=address,
             estimate_number=sample_id[:8],
+            rgb_bytes=rgb_bytes,
         )
 
         # Find the cutsheets PDF
@@ -576,7 +615,10 @@ async def generate_finalized_pdf(
     # 2. Sample
     sample_result = (
         supabase.table("training_samples")
-        .select("dsm_storage_path, formatted_address, source_address, meters_per_px")
+        .select(
+            "dsm_storage_path, rgb_storage_path, formatted_address, "
+            "source_address, meters_per_px"
+        )
         .eq("id", sample_id)
         .execute()
     )
@@ -754,6 +796,13 @@ async def generate_finalized_pdf(
         elif panel_type_qs == "corrugated":
             coverage_in, profile = 26.0, "CORR"
 
+        # Best-effort RGB ortho download for the cut-sheet PDF's
+        # orthographic / 3D-views aerial cell. Field-scale doesn't change
+        # which RGB we use — same Google Solar imagery as the unscaled run.
+        rgb_bytes = _fetch_rgb_bytes(
+            supabase, settings, sample.get("rgb_storage_path"),
+        )
+
         output_paths = await asyncio.to_thread(
             run_pipeline,
             dsm_arr,
@@ -767,6 +816,7 @@ async def generate_finalized_pdf(
             estimate_number=sample_id[:8],
             coverage_in=coverage_in,
             profile=profile,
+            rgb_bytes=rgb_bytes,
         )
 
         pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")
