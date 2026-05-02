@@ -21,7 +21,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request
 from supabase import Client
 
-from ..boundaries import robust_dsm_sample
+from ..boundaries import _bilinear_sample, robust_dsm_sample
 from ..planes import fit_plane_ransac
 from .config import Settings
 from .deps import Principal, get_settings, get_supabase, require_principal, verify_sample_access
