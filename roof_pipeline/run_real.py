@@ -132,6 +132,7 @@ def run_pipeline(
 
     # Prefer the click-coords path -- exactly N vertices, straight edges.
     user_edge_types: dict[int, list[str]] = {}
+    panel_run_match: dict[int, int] = {}  # target_pid -> source_pid for run-direction copy
     if panels_json_path is not None and panels_json_path.exists() and not no_clicks:
         log.info("=== boundaries from clicks (%s) ===", panels_json_path.name)
         polygons = polygons_from_clicks(panels_json_path, dsm, res_m, planes)
@@ -177,9 +178,20 @@ def run_pipeline(
                     else:
                         mapped.append(FRONT_TO_SIDECAR.get(key, key.upper()))
                 user_edge_types[pid] = mapped
+                # Per-panel "match my run direction to another panel". Pulled
+                # from the same panels.json so a project-level fix can be
+                # written once and persisted alongside the labels.
+                match = entry.get("match_run_with_panel_id")
+                if isinstance(match, int) and match != pid:
+                    panel_run_match[pid] = match
             if user_edge_types:
                 log.info(
                     "loaded user edge_types for %d panels", len(user_edge_types)
+                )
+            if panel_run_match:
+                log.info(
+                    "loaded panel_run_match for %d panels: %s",
+                    len(panel_run_match), panel_run_match,
                 )
         except Exception as exc:
             log.warning("failed to load edge_types from %s: %s", panels_json_path, exc)
@@ -257,6 +269,8 @@ def run_pipeline(
         # Threaded through to roof_dict_from_pipeline, which prefers
         # these labels over its geometric classifier when present.
         "user_edge_types": user_edge_types or None,
+        # Per-panel run-direction match: target_pid -> source_pid.
+        "panel_run_match": panel_run_match or None,
     }
     # Decode RGB ortho if provided. Used by the orthographic-views page
     # to show the actual Google Solar imagery in the AERIAL cell and to

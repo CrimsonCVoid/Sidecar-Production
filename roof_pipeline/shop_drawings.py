@@ -1303,6 +1303,7 @@ def _scan_line_sheets(
     edge_types: list[str] | None = None,
     plane_residual_m: float | None = None,
     installer_start_edge: str | None = None,
+    run_dir_override: np.ndarray | None = None,
 ) -> tuple[list[np.ndarray], list[float], np.ndarray, str]:
     """Lay panels by sweeping a coverage-wide strip across the face.
 
@@ -1321,12 +1322,21 @@ def _scan_line_sheets(
     if outline_world.shape[0] < 3:
         return [], [], np.array([1.0, 0.0]), "empty"
 
-    run_dir, source = _resolve_run_direction(
-        outline_world,
-        plane_normal,
-        edge_types=edge_types,
-        plane_residual_m=plane_residual_m,
-    )
+    if run_dir_override is not None:
+        run_dir = np.asarray(run_dir_override, dtype=float)[:2]
+        norm = float(np.linalg.norm(run_dir))
+        if norm < 1e-9:
+            run_dir = np.array([1.0, 0.0])
+        else:
+            run_dir = run_dir / norm
+        source = "match_panel"
+    else:
+        run_dir, source = _resolve_run_direction(
+            outline_world,
+            plane_normal,
+            edge_types=edge_types,
+            plane_residual_m=plane_residual_m,
+        )
     perp_dir = np.array([-run_dir[1], run_dir[0]])
 
     cos_theta = abs(float(plane_normal[2]))
@@ -3288,6 +3298,7 @@ def _layout_sheets(
     *,
     edge_types: list[str] | None = None,
     installer_start_edge: str | None = None,
+    run_dir_override: np.ndarray | None = None,
 ) -> tuple[list[dict], np.ndarray, str]:
     """Generate metal-sheet records for one face using scan-line clipping.
 
@@ -3304,6 +3315,7 @@ def _layout_sheets(
         edge_types=edge_types,
         plane_residual_m=getattr(plane, "rms_residual", None),
         installer_start_edge=installer_start_edge,
+        run_dir_override=run_dir_override,
     )
     records = [
         {
@@ -3367,6 +3379,16 @@ def roof_dict_from_pipeline(
     except Exception:
         _edge_clf_on = False
         predict_edges = None  # type: ignore
+
+    # Per-panel "match this panel's run direction to another panel's"
+    # overrides come in via project_meta. Same shape as user_edge_types:
+    # dict[int, int]. Used for the case where the resolver picks the
+    # wrong axis on a face but a sibling face is laying out correctly —
+    # the user (or a small per-project script) tells the bad face to
+    # copy the good face's run_dir. Applied in a post-pass below.
+    panel_run_match: dict[int, int] = (
+        project_meta.get("panel_run_match") or {}
+    )
 
     panels = []
     panel_ids = sorted(polygons.keys())
@@ -3485,6 +3507,11 @@ def roof_dict_from_pipeline(
 
         panels.append({
             "panel_id": f"panel_{pid}",
+            "_pid": pid,                                 # internal: integer id for match-pass lookup
+            "_polygon": cleaned_poly,                    # internal: kept for re-layout
+            "_plane": plane,                             # internal: kept for re-layout
+            "_kept_types": kept_types,                   # internal: kept for re-layout
+            "_run_dir_xy": run_dir_xy,                   # internal: resolved run direction
             "plane_normal": [float(x) for x in plane.normal],
             "plane_centroid": [float(centroid[0]), float(centroid[1]), float(centroid[2])],
             "plane_residual_m": float(getattr(plane, "rms_residual", 0.0) or 0.0),
@@ -3495,6 +3522,48 @@ def roof_dict_from_pipeline(
             "split_candidate": split_tag,
             "installer_start_edge": installer_start_edge,
         })
+
+    # Post-pass: any panel whose pid has an entry in panel_run_match gets
+    # its sheets re-laid using the referenced panel's resolved run_dir.
+    # Skipped silently when the referenced panel isn't found.
+    if panel_run_match:
+        by_pid = {p["_pid"]: p for p in panels}
+        for target_pid, source_pid in panel_run_match.items():
+            try:
+                target_pid_i = int(target_pid)
+                source_pid_i = int(source_pid)
+            except (TypeError, ValueError):
+                continue
+            if target_pid_i not in by_pid or source_pid_i not in by_pid:
+                log.warning(
+                    "panel_run_match: skipping %s -> %s (pid not found)",
+                    target_pid, source_pid,
+                )
+                continue
+            target = by_pid[target_pid_i]
+            source_panel = by_pid[source_pid_i]
+            override = source_panel["_run_dir_xy"]
+            sheet_records, _, src = _layout_sheets(
+                target["_polygon"],
+                target["_plane"],
+                coverage_ft,
+                edge_types=target["_kept_types"],
+                installer_start_edge=target.get("installer_start_edge"),
+                run_dir_override=override,
+            )
+            target["sheets"] = sheet_records
+            target["run_dir_source"] = (
+                f"match_panel_{source_pid_i}"
+            )
+            log.info(
+                "panel %d: run_dir matched to panel %d (%d sheets)",
+                target_pid_i, source_pid_i, len(sheet_records),
+            )
+
+    # Strip internal-only fields before returning the dict.
+    for p in panels:
+        for k in ("_pid", "_polygon", "_plane", "_kept_types", "_run_dir_xy"):
+            p.pop(k, None)
 
     return {
         "estimate_number": project_meta.get("estimate_number", "AUTO-0001"),

@@ -37,6 +37,14 @@ class PanelCorners(BaseModel):
     # than the raw bilinear DSM read. None inside the array = no
     # override for that index.
     corner_z_overrides: list[float | None] | None = None
+    # Match this face's sheet run direction to another face's resolved
+    # run direction. Set when the auto-resolver picks the wrong axis on
+    # a face that should obviously align with a sibling (typical case:
+    # two parallel slopes meeting at a ridge — they should run the same
+    # way). The pipeline runs the resolver normally for every panel
+    # first, then in a post-pass copies the resolved run_dir from the
+    # referenced panel onto any panel that names it here.
+    match_run_with_panel_id: int | None = None
 
     @field_validator("corners_pix")
     @classmethod
