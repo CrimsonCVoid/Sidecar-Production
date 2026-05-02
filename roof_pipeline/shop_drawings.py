@@ -2459,92 +2459,29 @@ def _render_page4(
     # numbered markers to legend.)
 
 
-# ---------------------------------------------------------------------------
-# Page 5: 3D Views (top + 4 tilted sides)
-# ---------------------------------------------------------------------------
-
-def _render_page_3d_views(
-    c: pdfcanvas.Canvas, roof: dict,
-    page_num: int = 5, total_pages: int = 5,
-) -> None:
-    """Embed a 5-view 3D render of the roof.
-
-    Views: TOP (orthographic down) plus FRONT / BACK / LEFT / RIGHT with
-    ~20 deg downward tilt so elevation and roof surface are both visible.
-    Rendered via matplotlib 3D, saved to a single composite PNG, embedded.
-    """
-    page_w, page_h = ANSI_B_LANDSCAPE
-    c.setPageSize((page_w, page_h))
-    meta = _meta(roof)
-
-    # Header (same format as other landscape pages)
-    c.setFont(FONT_BOLD, 14)
-    c.drawString(40, page_h - 36, "3D VIEWS")
-    c.setFont(FONT, 9)
-    c.drawString(40, page_h - 50, meta["project_name"])
-    c.drawRightString(page_w - 40, page_h - 36,
-                      f"Estimate {meta['estimate_number']}")
-    c.drawRightString(page_w - 40, page_h - 50,
-                      f"REV {meta['revision']}  |  {meta['date']}  |  "
-                      f"DRAWN: {meta['drawn_by']}  |  "
-                      f"Page {page_num} of {total_pages}")
-
-    panels = roof.get("roof_panels", [])
-    if not panels:
-        c.setFont(FONT, 10)
-        c.drawCentredString(page_w / 2.0, page_h / 2.0, "(no roof geometry)")
-        return
-
-    rgb_image = roof.get("rgb_image")
-    rgb_res_m = roof.get("rgb_res_m")
-    try:
-        png_path = _render_5views_png(panels, rgb_image=rgb_image, rgb_res_m=rgb_res_m)
-    except Exception as e:  # matplotlib missing or mis-configured
-        log.warning("page 3D: skipping render (%s)", e)
-        c.setFont(FONT, 10)
-        c.drawCentredString(page_w / 2.0, page_h / 2.0,
-                            "(3D render unavailable)")
-        return
-    if png_path is None:
-        return
-    try:
-        # Fill the page minus header
-        img_x = 40.0
-        img_y = 60.0
-        img_w = page_w - 80.0
-        img_h = page_h - 130.0
-        c.drawImage(str(png_path), img_x, img_y, width=img_w, height=img_h,
-                    preserveAspectRatio=True, mask="auto")
-    finally:
-        try:
-            png_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
 def _render_orthographic_views_png(
     panels: list[dict],
     *,
     rgb_image: np.ndarray | None = None,
     rgb_res_m: float | None = None,
 ) -> Path | None:
-    """True-orthographic 5-panel composite for the dedicated ortho page.
+    """Six-cell composite: AERIAL + 3D plan + four angled ortho views.
 
-    Distinct from `_render_5views_png` in three ways:
-      1. The four directional elevations use elev=0 (no perspective
-         tilt). What the contractor sees is what gets measured.
-      2. Each elevation gets explicit overall width + height dimension
-         lines drawn on the figure so the page is usable for spot
-         dimensional checks without flipping back to the wireframe.
-      3. The TOP cell always renders the mesh in plan view, even when
-         RGB is available — the existing 3D-views page already shows
-         the aerial. This page is the geometric-only complement.
+    Replaces the standalone 3D-views page that used to live on its own.
+    Each of the four directional cells (N/E/S/W) is rendered as an
+    *angled* orthographic projection (elev=25°) rather than a pure
+    side-on profile. The shallow downward tilt is what makes the roof
+    surface visible at all — at elev=0 you only see the silhouette.
+    Each panel face is colored by sampling the average RGB inside its
+    polygon footprint on the Google Solar imagery, so the contractor
+    sees the actual material color and can match the angled views back
+    to the aerial in column 0.
 
-    Layout: 2x3 grid.
-        [ TOP plan ][ N elev ][ E elev ]
-        [ TOP plan ][ S elev ][ W elev ]
-    The TOP cell spans both rows of column 0 so it's the dominant
-    visual; elevations slot to the right.
+    Layout (2 rows × 4 columns):
+        [ aerial   ][ 3D plan ][ N angled ][ E angled ]
+        [ aerial   ][ 3D plan ][ S angled ][ W angled ]
+    AERIAL + 3D-plan each span both rows for visual weight; the four
+    angled views slot into the right two columns.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -2656,7 +2593,7 @@ def _render_orthographic_views_png(
     ax_s = fig.add_subplot(gs[1, 2], projection="3d")
     ax_w = fig.add_subplot(gs[1, 3], projection="3d")
 
-    def populate_elev(ax, azim: float, title: str, span_lateral_ft: float) -> None:
+    def populate_elev(ax, azim: float, title: str) -> None:
         for verts, fc in zip(tris, face_colors):
             pc = Poly3DCollection(
                 [verts], facecolor=fc, edgecolor="#222", linewidth=0.4, alpha=0.97,
@@ -2664,8 +2601,7 @@ def _render_orthographic_views_png(
             ax.add_collection3d(pc)
         hx = 0.5 * (mx[0] - mn[0]) * 1.10
         hy = 0.5 * (mx[1] - mn[1]) * 1.10
-        hz = 0.5 * (mx[2] - mn[2]) * 1.40  # mild z-exaggeration so
-        # low-slope roofs aren't a flat line at this scale.
+        hz = 0.5 * (mx[2] - mn[2]) * 1.10
         ax.set_xlim(cx - hx, cx + hx)
         ax.set_ylim(cy - hy, cy + hy)
         ax.set_zlim(cz - hz, cz + hz)
@@ -2678,11 +2614,11 @@ def _render_orthographic_views_png(
         except Exception:
             pass
         ax.set_axis_off()
-        ax.view_init(elev=0.0, azim=azim)
-        ax.set_title(
-            f"{title}  —  {span_lateral_ft:.1f}' wide × {span_z_ft:.1f}' tall",
-            fontsize=10, fontweight="bold",
-        )
+        # 25° downward tilt: enough to reveal each face's slope and the
+        # satellite-sampled color, without distorting horizontal runs
+        # so much that the view loses its orthographic feel.
+        ax.view_init(elev=25.0, azim=azim)
+        ax.set_title(title, fontsize=10, fontweight="bold")
 
     # If RGB wasn't available, paint the aerial cell with a mesh
     # top-down so the page still has all six cells.
@@ -2714,10 +2650,10 @@ def _render_orthographic_views_png(
             fontsize=11, fontweight="bold",
         )
 
-    populate_elev(ax_n, azim=-90.0, title="N elevation", span_lateral_ft=span_x_ft)
-    populate_elev(ax_s, azim=90.0,  title="S elevation", span_lateral_ft=span_x_ft)
-    populate_elev(ax_e, azim=0.0,   title="E elevation", span_lateral_ft=span_y_ft)
-    populate_elev(ax_w, azim=180.0, title="W elevation", span_lateral_ft=span_y_ft)
+    populate_elev(ax_n, azim=-90.0, title="LOOKING SOUTH")
+    populate_elev(ax_s, azim=90.0,  title="LOOKING NORTH")
+    populate_elev(ax_e, azim=0.0,   title="LOOKING WEST")
+    populate_elev(ax_w, azim=180.0, title="LOOKING EAST")
 
     fd, tmp = tempfile.mkstemp(suffix=".png")
     import os
@@ -2734,10 +2670,9 @@ def _render_page_orthographic_views(
 ) -> None:
     """Pure-orthographic 5-cell page: TOP plan + N/S/E/W elevations.
 
-    Companion to `_render_page_3d_views`. The 3D-views page tilts the
-    side cells 20° for surface visibility; this page keeps them at 0°
-    so dimension labels read off the elevation axes directly. Both
-    pages share the per-panel RGB texture sampling.
+    Six-cell composite (defined in _render_orthographic_views_png):
+    AERIAL satellite + 3D plan + four angled (25°) ortho views, each
+    panel face colored by sampling the satellite ortho.
     """
     page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
@@ -2755,14 +2690,13 @@ def _render_page_orthographic_views(
                       f"DRAWN: {meta['drawn_by']}  |  "
                       f"Page {page_num} of {total_pages}")
 
-    # Sub-heading explains why this page exists alongside the 3D views.
     c.setFont(FONT_ITALIC, 8.5)
     c.setFillColor(colors.HexColor("#666666"))
     c.drawString(
         40, page_h - 64,
-        "Pure orthographic projection — elev=0° on every elevation. "
-        "Use these for tape-measure verification; the 3D-views page is "
-        "for shape comprehension.",
+        "Top-down satellite + 3D plan, then four angled (25° tilt) "
+        "orthographic views. Each panel face is colored from the "
+        "Google Solar imagery so the view matches the aerial.",
     )
     c.setFillColor(colors.black)
 
@@ -2868,134 +2802,6 @@ def _crop_rgb_to_roof(
     return rgb[r0:r1, c0:c1]
 
 
-def _render_5views_png(
-    panels: list[dict],
-    *,
-    rgb_image: np.ndarray | None = None,
-    rgb_res_m: float | None = None,
-) -> Path | None:
-    """Render TOP + 4 angled side views into one composite PNG.
-
-    When `rgb_image` (the Google Solar API ortho) is provided:
-      • TOP cell shows the actual aerial imagery cropped to the roof.
-      • N/S/E/W cells colour each panel with the average RGB sampled
-        from its footprint on the ortho — the mesh appears textured
-        with real Google imagery instead of palette-coloured.
-    When `rgb_image` is None (older samples without RGB), we fall back
-    to the previous palette-coloured 3D mesh.
-    """
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
-    tris: list[np.ndarray] = []
-    all_xyz: list[np.ndarray] = []
-    face_colors: list[str] = []
-    edge_colors: list[str] = []
-    have_rgb = rgb_image is not None and rgb_res_m is not None
-    for idx, panel in enumerate(panels):
-        b = np.asarray(panel.get("boundary_3d", []), dtype=float)
-        if b.shape[0] < 3:
-            continue
-        tris.append(b)
-        all_xyz.append(b)
-        if have_rgb:
-            try:
-                c_hex = _sample_panel_color(b, rgb_image, rgb_res_m)
-            except Exception as e:
-                log.warning("RGB sample failed for panel %d (%s) — falling back to palette", idx, e)
-                c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
-        else:
-            c_hex = PANEL_PALETTE[idx % len(PANEL_PALETTE)]
-        face_colors.append(c_hex)
-        edge_colors.append("#222222")
-    if not tris:
-        return None
-    pts = np.vstack(all_xyz)
-    mn = pts.min(axis=0)
-    mx = pts.max(axis=0)
-
-    fig = plt.figure(figsize=(16, 10), dpi=150)
-    gs = fig.add_gridspec(2, 4, wspace=0.02, hspace=0.08)
-
-    # TOP cell: real Google Solar ortho when available, otherwise the
-    # mesh-rendered top-down view.
-    if have_rgb:
-        ax_top = fig.add_subplot(gs[0:2, 0:2])
-        ax_top.set_axis_off()
-        try:
-            cropped = _crop_rgb_to_roof(rgb_image, pts[:, :2], rgb_res_m)
-            ax_top.imshow(cropped)
-            ax_top.set_title("TOP (Google Solar imagery)",
-                             fontsize=11, fontweight="bold")
-        except Exception as e:
-            log.warning("TOP imshow failed (%s) — falling back to mesh", e)
-            # Replace with a 3D subplot
-            fig.delaxes(ax_top)
-            ax_top = fig.add_subplot(gs[0:2, 0:2], projection="3d")
-            have_rgb = False  # so populate() will fill it as a 3D view
-    else:
-        ax_top = fig.add_subplot(gs[0:2, 0:2], projection="3d")
-
-    ax_front = fig.add_subplot(gs[0, 2], projection="3d")
-    ax_right = fig.add_subplot(gs[0, 3], projection="3d")
-    ax_back  = fig.add_subplot(gs[1, 2], projection="3d")
-    ax_left  = fig.add_subplot(gs[1, 3], projection="3d")
-
-    SIDE_TILT = 20.0
-    SIDE_ZOOM = 1.35
-
-    cx = 0.5 * (mn[0] + mx[0])
-    cy = 0.5 * (mn[1] + mx[1])
-    cz = 0.5 * (mn[2] + mx[2])
-
-    def populate(ax, elev, azim, title, zoom=1.0, exaggerate_z=1.0):
-        for verts, fc, ec in zip(tris, face_colors, edge_colors):
-            pc = Poly3DCollection(
-                [verts], facecolor=fc, edgecolor=ec, linewidth=0.5, alpha=0.97,
-            )
-            ax.add_collection3d(pc)
-        hx = 0.5 * (mx[0] - mn[0]) / zoom
-        hy = 0.5 * (mx[1] - mn[1]) / zoom
-        hz = 0.5 * (mx[2] - mn[2]) / zoom
-        ax.set_xlim(cx - hx, cx + hx)
-        ax.set_ylim(cy - hy, cy + hy)
-        ax.set_zlim(cz - hz, cz + hz)
-        try:
-            ax.set_box_aspect((hx, hy, hz * exaggerate_z))
-        except Exception:
-            pass
-        try:
-            ax.set_proj_type("ortho")
-        except Exception:
-            pass
-        ax.set_axis_off()
-        ax.view_init(elev=elev, azim=azim)
-        ax.set_title(title, fontsize=11, fontweight="bold")
-
-    if not have_rgb:
-        populate(ax_top, elev=90.0, azim=-90.0, title="TOP", zoom=1.05)
-
-    # Side views: textured by RGB sample if available, otherwise palette.
-    populate(ax_front, elev=SIDE_TILT, azim=-90.0, title="N",
-             zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_right, elev=SIDE_TILT, azim=0.0,   title="S",
-             zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_back,  elev=SIDE_TILT, azim=90.0,  title="E",
-             zoom=SIDE_ZOOM, exaggerate_z=1.6)
-    populate(ax_left,  elev=SIDE_TILT, azim=180.0, title="W",
-             zoom=SIDE_ZOOM, exaggerate_z=1.6)
-
-    fd, tmp = tempfile.mkstemp(suffix=".png")
-    import os
-    os.close(fd)
-    out = Path(tmp)
-    fig.savefig(out, bbox_inches="tight", pad_inches=0.1, facecolor="white")
-    plt.close(fig)
-    return out
-
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -3023,12 +2829,12 @@ def generate_shop_drawings(
 
     # Dynamic page count: panel layout + 2 wireframe pages (clean + dimensioned)
     # + edge/trim pages + per-panel cut list + consolidated cut summary
-    # (may span multiple pages) + combined edge detail + 3D views
+    # (may span multiple pages) + combined edge detail + orthographic
+    # views (now the consolidated page: aerial + 3D plan + four angled
+    # ortho views; the standalone 3D-views page was removed).
     n_p2 = _num_edge_trim_pages(roof)
     n_cut = _num_cut_summary_pages(roof)
-    # +1 for the new orthographic-views page (Google aerial + 3D plan
-    # + N/S/E/W elevations) appended after the existing 3D-views page.
-    total_pages = 1 + 2 + n_p2 + 1 + n_cut + 1 + 1 + 1
+    total_pages = 1 + 2 + n_p2 + 1 + n_cut + 1 + 1
 
     c = pdfcanvas.Canvas(str(output_path), pagesize=ANSI_B_PORTRAIT)
 
@@ -3072,15 +2878,12 @@ def generate_shop_drawings(
     _render_page4(c, roof, formulas, page_num=p4_num, total_pages=total_pages)
     c.showPage()
 
-    p5_num = p4_num + 1
-    log.info("shop_drawings: rendering page %d (3D views)", p5_num)
-    _render_page_3d_views(c, roof, page_num=p5_num, total_pages=total_pages)
-    c.showPage()
-
-    p6_num = p5_num + 1
-    log.info("shop_drawings: rendering page %d (orthographic views)", p6_num)
+    p_ortho_num = p4_num + 1
+    log.info(
+        "shop_drawings: rendering page %d (orthographic views)", p_ortho_num,
+    )
     _render_page_orthographic_views(
-        c, roof, page_num=p6_num, total_pages=total_pages,
+        c, roof, page_num=p_ortho_num, total_pages=total_pages,
     )
     c.showPage()
 

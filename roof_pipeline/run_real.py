@@ -257,10 +257,10 @@ def run_pipeline(
         # these labels over its geometric classifier when present.
         "user_edge_types": user_edge_types or None,
     }
-    # Decode RGB ortho if provided. Used by _render_page_3d_views to
-    # show the actual Google Solar imagery as the TOP cell and to
-    # color the per-panel meshes in the N/S/E/W cells with the average
-    # color sampled from the panel's footprint on the ortho.
+    # Decode RGB ortho if provided. Used by the orthographic-views page
+    # to show the actual Google Solar imagery in the AERIAL cell and to
+    # color each panel face in the four angled views with the average
+    # RGB sampled from the panel's footprint on the ortho.
     rgb_image: np.ndarray | None = None
     if rgb_bytes is not None:
         try:
