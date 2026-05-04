@@ -2935,7 +2935,7 @@ def _render_orthographic_views_png(
             cropped = _crop_rgb_to_roof(rgb_image, pts[:, :2], rgb_res_m)
             ax_aerial.imshow(cropped)
             ax_aerial.set_axis_off()
-            ax_aerial.set_title("AERIAL (Google Solar imagery)",
+            ax_aerial.set_title("AERIAL (Google imagery)",
                                 fontsize=12, fontweight="bold")
         except Exception as e:
             log.warning("AERIAL imshow failed (%s) — using plan fallback", e)
@@ -2950,7 +2950,7 @@ def _render_orthographic_views_png(
             ax_aerial.set_ylim(mn[1] - pad_y, mx[1] + pad_y)
             ax_aerial.set_axis_off()
             ax_aerial.set_title(
-                "AERIAL (mesh fallback — no Solar imagery)",
+                "AERIAL (mesh fallback — no imagery available)",
                 fontsize=12, fontweight="bold",
             )
     else:
@@ -2965,7 +2965,7 @@ def _render_orthographic_views_png(
         ax_aerial.set_ylim(mn[1] - pad_y, mx[1] + pad_y)
         ax_aerial.set_axis_off()
         ax_aerial.set_title(
-            "AERIAL (mesh fallback — no Solar imagery)",
+            "AERIAL (mesh fallback — no imagery available)",
             fontsize=12, fontweight="bold",
         )
 
@@ -3034,7 +3034,7 @@ def _render_page_orthographic_views(
     c.setFillColor(colors.HexColor("#666666"))
     c.drawString(
         40, page_h - 64,
-        "Side-by-side: Google Solar aerial on the left, top-down 3D "
+        "Side-by-side: Google aerial on the left, top-down 3D "
         "plan on the right. Panel colors on the plan are sampled from "
         "the satellite ortho so the two views read as the same roof.",
     )
