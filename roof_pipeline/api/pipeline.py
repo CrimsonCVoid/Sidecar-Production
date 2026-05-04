@@ -517,19 +517,46 @@ async def generate_pdf(
 
         log.info("generating PDF for sample %s (%d panels)", sample_id, len(panels))
 
-        output_paths = await asyncio.to_thread(
-            run_pipeline,
-            dsm_arr,
-            mask_arr,
-            actual_res,
-            out_dir,
-            use_snap_v2=True,
-            panels_json_path=panels_json,
-            project_name=address,
-            project_address=address,
-            estimate_number=sample_id[:8],
-            rgb_bytes=rgb_bytes,
-        )
+        try:
+            output_paths = await asyncio.to_thread(
+                run_pipeline,
+                dsm_arr,
+                mask_arr,
+                actual_res,
+                out_dir,
+                use_snap_v2=True,
+                panels_json_path=panels_json,
+                project_name=address,
+                project_address=address,
+                estimate_number=sample_id[:8],
+                rgb_bytes=rgb_bytes,
+            )
+        except Exception as exc:
+            # Convert known labeler-data failures into clean 4xxs instead
+            # of a generic 500 so the user gets an actionable message.
+            # The shapely TopologicalError fires from
+            # panel_snap_v2/winding.normalize_winding when the labeler
+            # let through a self-intersecting polygon (edges cross each
+            # other; bowtie / figure-8 shape). Only fix is the user
+            # redrawing the panel.
+            from shapely.errors import TopologicalError  # local import — keep top of file lean
+
+            if isinstance(exc, TopologicalError):
+                msg = str(exc) or "self-intersecting polygon"
+                log.warning(
+                    "[generate-pdf] labeler-data error on sample %s: %s",
+                    sample_id, msg,
+                )
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Panel data is invalid: {msg}. Open the Labeler "
+                        "tab, find the offending panel, and redraw it as a "
+                        "simple polygon (no crossing edges, vertices in "
+                        "order)."
+                    ),
+                ) from exc
+            raise
 
         # Find the cutsheets PDF
         pdf_path = output_paths.get("cutsheets_pdf")
