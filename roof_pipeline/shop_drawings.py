@@ -1154,6 +1154,50 @@ def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | Non
 EAVE_TYPES: tuple[str, ...] = ("EAVE",)
 RAKE_TYPES: tuple[str, ...] = ("RAKE", "GABLE")
 
+# A clean, high-confidence eave label is allowed to override the
+# gradient-derived run direction when they disagree visibly. 3° is the
+# threshold above which the slant becomes obvious to the eye on a
+# printed sheet — below it, plane-fit and label noise are both within
+# tolerance and either choice looks right. 0.6m (~2 ft) is the minimum
+# total eave length we require before trusting the label; below that a
+# single mis-clicked corner can swing the bearing wildly.
+EAVE_OVERRIDE_THRESHOLD_DEG = 3.0
+EAVE_MIN_TOTAL_LENGTH_M = 0.6
+
+
+def _eave_bearing_with_quality(
+    polygon_xy: np.ndarray,
+    edge_types: list[str],
+) -> tuple[float, float, int] | None:
+    """Same length-weighted circular mean as ``_length_weighted_bearing``
+    but ALSO returns the total eave length (m) and segment count, so the
+    caller can decide whether the eave label is high-confidence enough
+    to override the plane-derived gradient. None when no eave edges.
+    """
+    n = len(polygon_xy)
+    if n < 2 or len(edge_types) != n:
+        return None
+    sx, sy = 0.0, 0.0
+    total_w = 0.0
+    seg_count = 0
+    for i in range(n):
+        if str(edge_types[i]).upper() not in {t.upper() for t in EAVE_TYPES}:
+            continue
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        d = b - a
+        L = float(math.hypot(d[0], d[1]))
+        if L < 1e-9:
+            continue
+        theta = math.atan2(float(d[1]), float(d[0])) % math.pi
+        sx += L * math.cos(2 * theta)
+        sy += L * math.sin(2 * theta)
+        total_w += L
+        seg_count += 1
+    if total_w < 1e-9 or (abs(sx) < 1e-9 and abs(sy) < 1e-9):
+        return None
+    return (math.atan2(sy, sx) / 2.0) % math.pi, total_w, seg_count
+
 
 def _resolve_run_direction(
     polygon_xy: np.ndarray,
@@ -1189,6 +1233,30 @@ def _resolve_run_direction(
     plane fit does.
     """
     polygon_xy = np.asarray(polygon_xy, dtype=float)[:, :2]
+    face_centroid = polygon_xy.mean(axis=0)
+
+    # Compute the eave-perp direction up front (when labels are present
+    # and high-confidence). Used both as the legacy fallback when
+    # gradient is bowed out AND as a sanity check against the gradient
+    # — see the override block below.
+    eave_perp_unit: np.ndarray | None = None
+    eave_total_length_m: float = 0.0
+    eave_seg_count: int = 0
+    if edge_types and len(edge_types) == polygon_xy.shape[0]:
+        eq = _eave_bearing_with_quality(polygon_xy, edge_types)
+        if eq is not None:
+            eave_bearing_rad, eave_total_length_m, eave_seg_count = eq
+            ec = _length_weighted_centroid(polygon_xy, edge_types, EAVE_TYPES)
+            if ec is not None:
+                perp_a = np.array([
+                    math.cos(eave_bearing_rad + math.pi / 2),
+                    math.sin(eave_bearing_rad + math.pi / 2),
+                ])
+                toward_eave = ec - face_centroid
+                chosen = perp_a if float(perp_a @ toward_eave) > 0 else -perp_a
+                norm = float(np.linalg.norm(chosen))
+                if norm > 1e-9:
+                    eave_perp_unit = chosen / norm
 
     # 1. Gradient (primary)
     nx, ny, nz = (
@@ -1208,27 +1276,47 @@ def _resolve_run_direction(
         and not residual_too_high
         and horiz > 1e-9
     ):
-        return -np.array([nx, ny]) / horiz, "gradient"
+        gradient_unit = -np.array([nx, ny]) / horiz
 
-    face_centroid = polygon_xy.mean(axis=0)
+        # Eave override: when a high-confidence labeled eave bearing
+        # disagrees with the gradient by more than EAVE_OVERRIDE_THRESHOLD_DEG,
+        # trust the label. Plane-fit noise of 1-2° is normal with DSM
+        # data and produces visibly slanted sheets against a clean eave
+        # — defensive check protects clean labels without letting wild
+        # ones pollute everything (the length + segment guards do that).
+        if (
+            eave_perp_unit is not None
+            and eave_total_length_m >= EAVE_MIN_TOTAL_LENGTH_M
+        ):
+            cos_diff = float(np.clip(gradient_unit @ eave_perp_unit, -1.0, 1.0))
+            diff_deg = math.degrees(math.acos(cos_diff))
+            if diff_deg > EAVE_OVERRIDE_THRESHOLD_DEG:
+                log.info(
+                    "[run-dir] eave override: gradient=%.1f° vs eave-perp=%.1f° "
+                    "(diff=%.1f° > %.1f°), eave_len=%.2fm segs=%d, "
+                    "residual=%.3fm",
+                    math.degrees(math.atan2(gradient_unit[1], gradient_unit[0])),
+                    math.degrees(math.atan2(eave_perp_unit[1], eave_perp_unit[0])),
+                    diff_deg,
+                    EAVE_OVERRIDE_THRESHOLD_DEG,
+                    eave_total_length_m,
+                    eave_seg_count,
+                    float(plane_residual_m or 0.0),
+                )
+                return eave_perp_unit, "eave_perp_override_gradient"
 
-    # 2. Eave-perp fallback (only when gradient bowed out)
-    if edge_types and len(edge_types) == polygon_xy.shape[0]:
-        eave_bearing = _length_weighted_bearing(
-            polygon_xy, edge_types, EAVE_TYPES,
+        return gradient_unit, "gradient"
+
+    # 2. Eave-perp fallback (only when gradient bowed out — computed
+    # at the top so we can reuse it both as the fallback and as the
+    # override target above).
+    if eave_perp_unit is not None:
+        tag = (
+            "eave_perp_low_slope"
+            if pitch_from_vertical_deg < low_slope_pitch_deg
+            else "eave_perp_high_residual"
         )
-        eave_centroid = _length_weighted_centroid(
-            polygon_xy, edge_types, EAVE_TYPES,
-        )
-        if eave_bearing is not None and eave_centroid is not None:
-            perp_a = np.array([
-                math.cos(eave_bearing + math.pi / 2),
-                math.sin(eave_bearing + math.pi / 2),
-            ])
-            toward_eave = eave_centroid - face_centroid
-            chosen = perp_a if float(perp_a @ toward_eave) > 0 else -perp_a
-            tag = "eave_perp_low_slope" if pitch_from_vertical_deg < low_slope_pitch_deg else "eave_perp_high_residual"
-            return chosen / float(np.linalg.norm(chosen)), tag
+        return eave_perp_unit, tag
 
     # 3. Rake-along fallback (rakes are inline with the run direction)
     if edge_types and len(edge_types) == polygon_xy.shape[0]:

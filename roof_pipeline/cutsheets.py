@@ -169,6 +169,7 @@ def _render_panel_drawing_png(
     out_path: Path,
     panel_id: int,
     edge_types: list[str] | None = None,
+    page_down_xy: np.ndarray | None = None,
 ) -> None:
     """Top-down dimensioned drawing of one panel in true-length feet.
 
@@ -177,7 +178,31 @@ def _render_panel_drawing_png(
     to each edge length on the drawing so crews can identify ridges,
     eaves, hips, etc. at a glance. Falls back to length-only when omitted
     or mismatched length.
+
+    ``page_down_xy`` is a 2D unit vector (in the rotated panel frame)
+    pointing down-slope. When provided, the polygon is rotated in-plane
+    so that direction maps to (0, -1) on the page — i.e. ridges land at
+    the top of the page and eaves at the bottom, consistent across every
+    per-panel page. Pure 2D rotation, still an isometry: every edge
+    length and interior angle is preserved exactly. Pass None for flat
+    panels (no defined down-slope) or to keep the legacy arbitrary
+    orientation.
     """
+    # Page-down alignment: rotate the planar polygon so the projected
+    # down-slope points to (0, -1) on the page. Applied BEFORE the plot
+    # so axes labels still read true-length feet.
+    if page_down_xy is not None:
+        d = np.asarray(page_down_xy, dtype=float)
+        norm = float(np.linalg.norm(d))
+        if norm > 1e-9:
+            d /= norm
+            cur_angle = math.atan2(d[1], d[0])
+            target_angle = -math.pi / 2  # (0, -1)
+            rot_angle = target_angle - cur_angle
+            c, s = math.cos(rot_angle), math.sin(rot_angle)
+            R2 = np.array([[c, -s], [s, c]])
+            verts_xy_ft = verts_xy_ft @ R2.T
+
     fig, ax = plt.subplots(figsize=(7.5, 6.0), dpi=150)
     closed = np.vstack([verts_xy_ft, verts_xy_ft[:1]])
     ax.plot(closed[:, 0], closed[:, 1], "k-", linewidth=1.5)
@@ -444,11 +469,40 @@ def write_cutsheets_pdf(
             area_m2 = polygon_area_2d(verts_xy_m)
             area_ft2 = area_m2 * SQM_TO_SQFT
 
+            # Page-down direction: project the world-frame down-slope vector
+            # ((-nx, -ny, 0) / horiz) into the rotated 2D panel frame so
+            # the per-panel renderer can swing it to point at (0, -1) on
+            # the page. None for flat panels \u2014 leaves legacy orientation.
+            nx, ny, _ = plane.normal
+            horiz = math.hypot(nx, ny)
+            if horiz > 1e-9:
+                ds_world = np.array([-nx / horiz, -ny / horiz, 0.0])
+                ds_rot = R @ ds_world
+                page_down_xy = ds_rot[:2]
+            else:
+                page_down_xy = None
+
+            # Residual gives a quick read on plane-fit confidence \u2014 a
+            # panel with high residual tends to also have visibly off
+            # sheet runs, so surfacing it on the page header lets a
+            # contractor cross-check at a glance. Centimetres because
+            # roofs are measured in inches and meters reads as too
+            # precise for the actual confidence interval.
+            residual_cm = (
+                getattr(plane, "rms_residual", None) or 0.0
+            ) * 100.0
+            residual_str = (
+                f" &nbsp; | &nbsp; Plane fit: \u00b1{residual_cm:.1f} cm"
+                if residual_cm > 0
+                else ""
+            )
+
             header = (
                 f"<b>Panel #{pid}</b> &nbsp; | &nbsp; "
                 f"Area: {area_ft2:.1f} ft\u00b2 &nbsp; | &nbsp; "
                 f"Slope: {slope_rise_over_12(plane.normal)}/12 &nbsp; | &nbsp; "
                 f"Azimuth: {azimuth_degrees(plane.normal):.0f}\u00b0"
+                f"{residual_str}"
             )
             flowables.append(Paragraph(header, styles["Heading2"]))
             flowables.append(Spacer(1, 0.1 * inch))
@@ -458,7 +512,9 @@ def write_cutsheets_pdf(
                 edge_types_by_panel.get(pid) if edge_types_by_panel else None
             )
             _render_panel_drawing_png(
-                verts_xy_ft, drawing_png, pid, edge_types=edge_types,
+                verts_xy_ft, drawing_png, pid,
+                edge_types=edge_types,
+                page_down_xy=page_down_xy,
             )
             flowables.append(Image(str(drawing_png), width=6.5 * inch, height=5.2 * inch))
 
