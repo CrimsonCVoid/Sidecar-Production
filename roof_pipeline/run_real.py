@@ -249,6 +249,7 @@ def run_pipeline(
     log.info("=== cut sheets (raw labeler polygons) ===")
     pdf_path = write_cutsheets_pdf(
         raw_polygons, planes, mesh, out_dir / "cutsheets.pdf",
+        edge_types_by_panel=user_edge_types or None,
     )
 
     log.info("=== TS exporter JSON (raw labeler polygons) ===")

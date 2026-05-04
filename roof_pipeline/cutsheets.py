@@ -136,12 +136,48 @@ def interior_angle_deg(prev_v: np.ndarray, vert: np.ndarray, next_v: np.ndarray)
 # Image renderers (matplotlib -> PNG -> embedded in PDF)
 # ---------------------------------------------------------------------------
 
+# Edge type → 2-letter code shown next to the length on each cut sheet edge.
+# Mirrors stores/labeler-store.ts EDGE_TYPE_META (website). Legacy keys
+# (rake, hip_cap, wall) map to the canonical new code so old projects
+# print consistently with new ones.
+EDGE_TYPE_CODES: dict[str, str] = {
+    "eave": "ED",
+    "ridge": "RC",
+    "hip": "HC",
+    "hip_cap": "HC",
+    "valley": "VF",
+    "rake": "GR",
+    "transition": "TF",
+    "high_side": "HS",
+    "flying_gable": "FG",
+    "sidewall": "SW",
+    "wall": "SW",  # legacy
+    "endwall": "EW",
+    "chimney_flashing": "CF",
+    "unlabeled": "",
+}
+
+
+def _edge_code_for(t: str | None) -> str:
+    if not t:
+        return ""
+    return EDGE_TYPE_CODES.get(str(t).lower(), "")
+
+
 def _render_panel_drawing_png(
     verts_xy_ft: np.ndarray,
     out_path: Path,
     panel_id: int,
+    edge_types: list[str] | None = None,
 ) -> None:
-    """Top-down dimensioned drawing of one panel in true-length feet."""
+    """Top-down dimensioned drawing of one panel in true-length feet.
+
+    ``edge_types`` is the labeler's per-edge classification (length must
+    match ``verts_xy_ft``). When provided, the 2-letter code is prefixed
+    to each edge length on the drawing so crews can identify ridges,
+    eaves, hips, etc. at a glance. Falls back to length-only when omitted
+    or mismatched length.
+    """
     fig, ax = plt.subplots(figsize=(7.5, 6.0), dpi=150)
     closed = np.vstack([verts_xy_ft, verts_xy_ft[:1]])
     ax.plot(closed[:, 0], closed[:, 1], "k-", linewidth=1.5)
@@ -149,6 +185,7 @@ def _render_panel_drawing_png(
 
     centroid = verts_xy_ft.mean(axis=0)
     n = verts_xy_ft.shape[0]
+    use_codes = edge_types is not None and len(edge_types) == n
     for i in range(n):
         a = verts_xy_ft[i]
         b = verts_xy_ft[(i + 1) % n]
@@ -161,8 +198,13 @@ def _render_panel_drawing_png(
         if np.dot(mid + out_dir - centroid, out_dir) < 0:
             out_dir = -out_dir
         label_pos = mid + out_dir * 0.6
+        length_str = meters_to_ft_in(length_m)
+        # "ED 12'-3"" when labeled, "12'-3"" when not — keeps unlabeled
+        # legacy projects looking the same as before.
+        code = _edge_code_for(edge_types[i]) if use_codes else ""
+        label_str = f"{code} {length_str}" if code else length_str
         ax.annotate(
-            meters_to_ft_in(length_m),
+            label_str,
             xy=label_pos,
             ha="center", va="center",
             fontsize=9, color="#003366",
@@ -325,8 +367,16 @@ def write_cutsheets_pdf(
     planes: dict[int, Plane],
     full_mesh: trimesh.Trimesh,
     out_path: str | Path,
+    edge_types_by_panel: dict[int, list[str]] | None = None,
 ) -> Path:
-    """Write the multi-page cut-sheet PDF: cover + one page per panel."""
+    """Write the multi-page cut-sheet PDF: cover + one page per panel.
+
+    ``edge_types_by_panel`` is the labeler's per-edge classification keyed
+    by panel id; when supplied (and the per-panel list length matches the
+    polygon's vertex count), each edge label gets its 2-letter code
+    prefix (e.g. "ED 12'-3\\""). Omitted / mismatched panels render
+    length-only so legacy projects look unchanged.
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -404,7 +454,12 @@ def write_cutsheets_pdf(
             flowables.append(Spacer(1, 0.1 * inch))
 
             drawing_png = tmp_dir / f"panel_{pid}.png"
-            _render_panel_drawing_png(verts_xy_ft, drawing_png, pid)
+            edge_types = (
+                edge_types_by_panel.get(pid) if edge_types_by_panel else None
+            )
+            _render_panel_drawing_png(
+                verts_xy_ft, drawing_png, pid, edge_types=edge_types,
+            )
             flowables.append(Image(str(drawing_png), width=6.5 * inch, height=5.2 * inch))
 
             inset_png = tmp_dir / f"inset_{pid}.png"
