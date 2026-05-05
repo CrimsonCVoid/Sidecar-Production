@@ -133,7 +133,7 @@ def _process_sample(sb, sample_id: str, panels: list[dict]):
 
     # Local imports keep the main module light when supabase deps aren't
     # installed yet — the script's first job is to install/check them.
-    from roof_pipeline.planes import fit_plane_ransac
+    from roof_pipeline.planes import fit_all_panels
     from roof_pipeline.boundaries import polygons_from_clicks
     from roof_pipeline.cutsheets import (
         polygon_area_2d,
@@ -197,11 +197,14 @@ def _process_sample(sb, sample_id: str, panels: list[dict]):
     if not panels_json:
         return []
 
-    # plane fits per panel
+    # plane fits per panel — fit_all_panels iterates panel ids in the
+    # mask, builds (N, 3) point clouds, and runs RANSAC on each.
     try:
-        planes = fit_plane_ransac(dsm, mask, res_m)
+        planes = fit_all_panels(dsm, mask, res_m)
     except Exception as exc:
         LOG.warning("  plane fit failed for %s: %s", sample_id[:8], exc)
+        return []
+    if not planes:
         return []
 
     # Lift clicks to plane-projected 3D polygons. polygons_from_clicks

@@ -31,3 +31,4 @@ output_*/
 .env
 .env.*
 !.env.example
+data/

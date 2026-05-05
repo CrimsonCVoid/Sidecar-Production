@@ -47,6 +47,18 @@ def _build_loaders(data_dir: Path, batch_size: int, val_split: float = 0.1):
     import torch
     from torch.utils.data import DataLoader, Dataset
 
+    # Solar API tiles vary in size (~400x400 to ~1000x1000 — depends on
+    # roof footprint + radius scaling). Resize every sample to a common
+    # 256x256 so they batch together. Bilinear for the input, nearest
+    # for the mask so we don't synthesize half-pixel labels.
+    #
+    # Why 256 specifically: the bottleneck attention layer is O(N²) in
+    # the spatial size after 2× max-pool. 384 → 96×96 = 9216 tokens →
+    # ≈ 22 GB on a single batch on M5 MPS. 256 → 64×64 = 4096 tokens
+    # → fits comfortably in 16 GB. Multiple of 16 to keep the pool
+    # math clean.
+    TARGET_HW = 256
+
     class _NpyPairDataset(Dataset):
         def __init__(self, paths):
             self.paths = list(paths)
@@ -60,7 +72,17 @@ def _build_loaders(data_dir: Path, batch_size: int, val_split: float = 0.1):
             mask = np.load(str(p).replace(".input.npy", ".mask.npy"))
             if mask.ndim == 2:
                 mask = mask[None]  # add channel dim
-            return torch.from_numpy(inp), torch.from_numpy(mask).float()
+
+            inp_t = torch.from_numpy(inp).unsqueeze(0)  # (1, C, H, W)
+            mask_t = torch.from_numpy(mask).unsqueeze(0).float()  # (1, 1, H, W)
+            inp_t = torch.nn.functional.interpolate(
+                inp_t, size=(TARGET_HW, TARGET_HW),
+                mode="bilinear", align_corners=False,
+            ).squeeze(0)
+            mask_t = torch.nn.functional.interpolate(
+                mask_t, size=(TARGET_HW, TARGET_HW), mode="nearest",
+            ).squeeze(0)
+            return inp_t, mask_t
 
     train_dir = data_dir / "train"
     val_dir = data_dir / "val"
@@ -85,9 +107,12 @@ def _build_loaders(data_dir: Path, batch_size: int, val_split: float = 0.1):
     )
     train_ds = _NpyPairDataset(train_paths)
     val_ds = _NpyPairDataset(val_paths)
+    # num_workers=0 — keeps the local Dataset picklable on Python 3.13+
+    # (where spawn-context worker startup tries to pickle the class
+    # itself), and at 116 samples the loader isn't the bottleneck.
     return (
-        DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2),
-        DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2),
+        DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0),
+        DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0),
     )
 
 
