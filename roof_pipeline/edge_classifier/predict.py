@@ -267,6 +267,7 @@ def predict_edges(
     *,
     confidence_threshold: float = 0.6,
     sample_id: str | None = None,
+    force: bool = False,
 ) -> list[tuple[str, float]] | None:
     """Predict (edge_type, confidence) for every edge on a panel.
 
@@ -275,6 +276,12 @@ def predict_edges(
     length poly.shape[0]. Per the spec, edges where confidence falls
     below confidence_threshold get None for the type so the downstream
     fallback can fill those in per-edge.
+
+    ``force=True`` bypasses the EDGE_CLASSIFIER_ENABLED env gate and
+    will trigger a load if the model isn't already in memory. Used by
+    the on-demand "suggest edge types" route (test accounts only) so
+    it can run the model even when the prod pipeline has the flag off.
+    Genuinely missing artifacts still return None.
 
     Phase 4 telemetry: emits one `edge_classifier.predicted` per panel
     with confidence quantiles + counts. Falls through to
@@ -286,7 +293,14 @@ def predict_edges(
     global _predict_total_calls, _predict_total_edges
     global _predict_high_confidence_edges
 
-    if not classifier_available() or _model is None or _label_encoder is None:
+    if force:
+        # On-demand path — try to load if not already loaded, then
+        # ignore the env flag for this single call.
+        if _model is None or _label_encoder is None:
+            load_model()
+        if _model is None or _label_encoder is None:
+            return None  # genuinely missing artifact / xgboost not installed
+    elif not classifier_available() or _model is None or _label_encoder is None:
         telemetry.track(
             "edge_classifier.fallback",
             sample_id=sample_id,
