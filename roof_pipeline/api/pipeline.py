@@ -56,6 +56,61 @@ def _fetch_rgb_bytes(supabase: Client, settings: Settings, rgb_storage_path: str
     return None
 
 
+def _resolve_drawn_by(supabase: Client, sample_id: str) -> str:
+    """Resolve the title-block "DRAWN BY" string for a project.
+
+    Order: users.full_name (project owner) -> organizations.name -> "AUTO".
+    Best-effort — any DB failure falls through to "AUTO" so PDF generation
+    never blocks on a missing profile/org row.
+    """
+    try:
+        proj = (
+            supabase.table("projects")
+            .select("user_id, organization_id")
+            .eq("id", sample_id)
+            .maybe_single()
+            .execute()
+        )
+        row = (proj.data if proj else None) or {}
+    except Exception:
+        log.exception("drawn_by: projects lookup failed for %s", sample_id)
+        return "AUTO"
+
+    user_id = row.get("user_id")
+    if user_id:
+        try:
+            u = (
+                supabase.table("users")
+                .select("full_name")
+                .eq("id", user_id)
+                .maybe_single()
+                .execute()
+            )
+            full_name = ((u.data if u else None) or {}).get("full_name")
+            if full_name and str(full_name).strip():
+                return str(full_name).strip()
+        except Exception:
+            log.exception("drawn_by: users lookup failed for %s", user_id)
+
+    org_id = row.get("organization_id")
+    if org_id:
+        try:
+            o = (
+                supabase.table("organizations")
+                .select("name")
+                .eq("id", org_id)
+                .maybe_single()
+                .execute()
+            )
+            org_name = ((o.data if o else None) or {}).get("name")
+            if org_name and str(org_name).strip():
+                return str(org_name).strip()
+        except Exception:
+            log.exception("drawn_by: organizations lookup failed for %s", org_id)
+
+    return "AUTO"
+
+
 # ---- Content type mapping for Supabase Storage uploads (D-13) ----
 _CONTENT_TYPES: dict[str, str] = {
     ".obj": "model/obj",
@@ -517,6 +572,8 @@ async def generate_pdf(
 
         log.info("generating PDF for sample %s (%d panels)", sample_id, len(panels))
 
+        drawn_by = _resolve_drawn_by(supabase, sample_id)
+
         try:
             output_paths = await asyncio.to_thread(
                 run_pipeline,
@@ -530,6 +587,7 @@ async def generate_pdf(
                 project_address=address,
                 estimate_number=sample_id[:8],
                 rgb_bytes=rgb_bytes,
+                drawn_by=drawn_by,
             )
         except Exception as exc:
             # Convert known labeler-data failures into clean 4xxs instead
@@ -830,6 +888,8 @@ async def generate_finalized_pdf(
             supabase, settings, sample.get("rgb_storage_path"),
         )
 
+        drawn_by = _resolve_drawn_by(supabase, sample_id)
+
         output_paths = await asyncio.to_thread(
             run_pipeline,
             dsm_arr,
@@ -844,6 +904,7 @@ async def generate_finalized_pdf(
             coverage_in=coverage_in,
             profile=profile,
             rgb_bytes=rgb_bytes,
+            drawn_by=drawn_by,
         )
 
         pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")

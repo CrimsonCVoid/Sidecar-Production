@@ -74,6 +74,7 @@ def run_pipeline(
     waste_pct: float = 11.0,
     rgb_bytes: bytes | None = None,
     installer_start_edge: str | None = None,
+    drawn_by: str | None = None,
 ) -> dict[str, Path]:
     """Execute the full roof pipeline on pre-loaded data arrays.
 
@@ -272,6 +273,9 @@ def run_pipeline(
         "user_edge_types": user_edge_types or None,
         # Per-panel run-direction match: target_pid -> source_pid.
         "panel_run_match": panel_run_match or None,
+        # Title-block "Drawn by" — the project owner's name, resolved by
+        # the API layer from auth.users / organizations.
+        "drawn_by": drawn_by,
     }
     # Decode RGB ortho if provided. Used by the orthographic-views page
     # to show the actual Google Solar imagery in the AERIAL cell and to

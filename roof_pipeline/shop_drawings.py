@@ -628,6 +628,169 @@ def _draw_text_box(
 
 
 # ---------------------------------------------------------------------------
+# Modern card style — used by the Sheet Cut List page for a polished
+# takeoff-summary look (Project Summary / Trim Takeoff / Trim Codes).
+# Lighter visual weight than _draw_text_box: thin gray border, soft title
+# bar with dark text, tracked-out caps, group sub-headers, and two-column
+# legend support.
+# ---------------------------------------------------------------------------
+
+CARD_BORDER = colors.HexColor("#DCDCDC")
+CARD_BAR_FILL = colors.HexColor("#F5F5F5")
+CARD_TITLE_FG = colors.HexColor("#1A1A1A")
+CARD_LABEL_FG = colors.HexColor("#555555")
+CARD_VALUE_FG = colors.HexColor("#111111")
+CARD_RULE = colors.HexColor("#E5E5E5")
+CARD_GROUP_FG = colors.HexColor("#666666")
+
+CARD_TITLE_BAR_H = 18.0
+CARD_PAD_X = 8.0
+CARD_PAD_TOP = 8.0
+CARD_PAD_BOTTOM = 6.0
+CARD_ROW_H = 13.0
+CARD_GROUP_LABEL_H = 9.0
+CARD_SECTION_GAP = 7.0
+
+
+def _draw_card_frame(
+    c: pdfcanvas.Canvas, x: float, top_y: float, w: float, h: float,
+    title: str,
+) -> None:
+    """Card with thin gray border, light title bar, dark tracked-caps title."""
+    bottom_y = top_y - h
+    c.setStrokeColor(CARD_BORDER)
+    c.setLineWidth(0.5)
+    c.rect(x, bottom_y, w, h, stroke=1, fill=0)
+    bar_y = top_y - CARD_TITLE_BAR_H
+    c.setFillColor(CARD_BAR_FILL)
+    c.rect(x, bar_y, w, CARD_TITLE_BAR_H, stroke=0, fill=1)
+    c.setStrokeColor(CARD_BORDER)
+    c.setLineWidth(0.5)
+    c.line(x, bar_y, x + w, bar_y)
+    c.setFillColor(CARD_TITLE_FG)
+    c.setFont(FONT_BOLD, 7.5)
+    c.setCharSpace(1.2)
+    c.drawString(x + CARD_PAD_X, bar_y + 5, title.upper())
+    c.setCharSpace(0)
+    c.setFillColor(colors.black)
+
+
+def _measure_kv_card_h(
+    sections: list[tuple[str | None, list[tuple[str, str]]]],
+) -> float:
+    h = CARD_TITLE_BAR_H + CARD_PAD_TOP
+    for si, (group, rows) in enumerate(sections):
+        if si > 0:
+            h += CARD_SECTION_GAP
+        if group is not None:
+            h += CARD_GROUP_LABEL_H
+        h += len(rows) * CARD_ROW_H
+    h += CARD_PAD_BOTTOM
+    return h
+
+
+def _draw_grouped_kv_card(
+    c: pdfcanvas.Canvas, x: float, top_y: float, w: float, title: str,
+    sections: list[tuple[str | None, list[tuple[str, str]]]],
+) -> float:
+    """Modern key/value card with optional group sub-headers + dividers.
+
+    Each section is ``(group_title or None, [(label, value), ...])``.
+    Returns total height drawn so the caller can chain cards downward.
+    """
+    h = _measure_kv_card_h(sections)
+    _draw_card_frame(c, x, top_y, w, h, title)
+    inner_l = x + CARD_PAD_X
+    inner_r = x + w - CARD_PAD_X
+    cy = top_y - CARD_TITLE_BAR_H - CARD_PAD_TOP
+    for si, (group, rows) in enumerate(sections):
+        if si > 0:
+            cy -= 2
+            c.setStrokeColor(CARD_RULE)
+            c.setLineWidth(0.4)
+            c.line(inner_l, cy, inner_r, cy)
+            cy -= CARD_SECTION_GAP - 2
+        if group is not None:
+            c.setFont(FONT_BOLD, 7)
+            c.setFillColor(CARD_GROUP_FG)
+            c.setCharSpace(0.8)
+            c.drawString(inner_l, cy, group.upper())
+            c.setCharSpace(0)
+            cy -= CARD_GROUP_LABEL_H
+        for label, value in rows:
+            c.setFont(FONT, 8.5)
+            c.setFillColor(CARD_LABEL_FG)
+            c.drawString(inner_l, cy, label)
+            c.setFont(FONT_BOLD, 8.5)
+            c.setFillColor(CARD_VALUE_FG)
+            c.drawRightString(inner_r, cy, value)
+            cy -= CARD_ROW_H
+    c.setFillColor(colors.black)
+    return h
+
+
+def _draw_codes_legend_card(
+    c: pdfcanvas.Canvas, x: float, top_y: float, w: float, title: str,
+    codes: list[tuple[str, str]],
+) -> float:
+    """Two-column code legend (mono code + label). Returns height drawn."""
+    n = len(codes)
+    rows_per_col = (n + 1) // 2
+    h = (
+        CARD_TITLE_BAR_H + CARD_PAD_TOP
+        + rows_per_col * CARD_ROW_H
+        + CARD_PAD_BOTTOM
+    )
+    _draw_card_frame(c, x, top_y, w, h, title)
+    inner_l = x + CARD_PAD_X
+    col_w = (w - 2 * CARD_PAD_X) / 2.0
+    cy_start = top_y - CARD_TITLE_BAR_H - CARD_PAD_TOP
+    for i, (code, label) in enumerate(codes):
+        col = 0 if i < rows_per_col else 1
+        row = i if col == 0 else i - rows_per_col
+        cx = inner_l + col * col_w
+        cy = cy_start - row * CARD_ROW_H
+        c.setFont("Courier-Bold", 8.0)
+        c.setFillColor(CARD_VALUE_FG)
+        c.drawString(cx, cy, code)
+        c.setFont(FONT, 8.5)
+        c.setFillColor(CARD_LABEL_FG)
+        c.drawString(cx + 22, cy, label)
+    c.setFillColor(colors.black)
+    return h
+
+
+def _draw_meta_strip(
+    c: pdfcanvas.Canvas, right_edge: float, top_y: float,
+    cells: list[tuple[str, str]],
+    cell_w: float = 78.0,
+) -> None:
+    """Horizontal label/value cells right-aligned to ``right_edge``.
+
+    Rendered as a small-caps label above a bold value, evenly spaced.
+    Used for the Sheet Cut List page header (Estimate / Rev / Date / Status / Page).
+    """
+    n = len(cells)
+    block_w = n * cell_w
+    x0 = right_edge - block_w
+    for i, (label, value) in enumerate(cells):
+        cx = x0 + i * cell_w
+        c.setFont(FONT_BOLD, 6.5)
+        c.setFillColor(colors.HexColor("#888888"))
+        c.setCharSpace(1.2)
+        c.drawString(cx, top_y, label.upper())
+        c.setCharSpace(0)
+        c.setFont(FONT_BOLD, 9.5)
+        c.setFillColor(CARD_VALUE_FG)
+        c.drawString(cx, top_y - 12, value)
+    c.setFillColor(colors.black)
+
+
+def _trim_label_titlecase(s: str) -> str:
+    return s.replace("_", " ").title()
+
+
+# ---------------------------------------------------------------------------
 # Wireframe pages — pure outline view + dimensioned outline view
 # ---------------------------------------------------------------------------
 
@@ -2276,24 +2439,43 @@ def _render_page3(
     c: pdfcanvas.Canvas, roof: dict,
     trim_formulas: dict[str, Callable[[dict[str, float]], float]],
     page_num: int = 3, total_pages: int = 4,
+    *,
+    status: str = "AUTO-GEN",
 ) -> None:
     page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
 
     meta = _meta(roof)
 
-    # Header
-    c.setFont(FONT_BOLD, 14)
+    # ---- Header strip ------------------------------------------------------
+    # Title + subtitle on the left; horizontal meta strip on the right;
+    # thin rule under the whole thing for separation from the body.
+    c.setFillColor(CARD_TITLE_FG)
+    c.setFont(FONT_BOLD, 16)
     c.drawString(40, page_h - 36, "SHEET CUT LIST")
     c.setFont(FONT, 9)
+    c.setFillColor(CARD_LABEL_FG)
     c.drawString(40, page_h - 50,
-                 f"{meta['project_name']}   |   {meta['project_address']}")
-    c.drawRightString(page_w - 40, page_h - 36, f"Estimate {meta['estimate_number']}")
-    c.drawRightString(page_w - 40, page_h - 50,
-                      f"REV {meta['revision']}  |  {meta['date']}  |  "
-                      f"DRAWN: {meta['drawn_by']}  |  Page {page_num} of {total_pages}")
+                 f"{meta['project_name']}  ·  {meta['project_address']}")
+    c.setFillColor(colors.black)
 
-    # Compute totals
+    _draw_meta_strip(
+        c, right_edge=page_w - 40, top_y=page_h - 32,
+        cells=[
+            ("Estimate", str(meta["estimate_number"]) or "—"),
+            ("Revision", str(meta["revision"])),
+            ("Date", str(meta["date"])),
+            ("Status", status),
+            ("Page", f"{page_num} / {total_pages}"),
+        ],
+    )
+
+    # Header rule
+    c.setStrokeColor(CARD_BORDER)
+    c.setLineWidth(0.6)
+    c.line(40, page_h - 60, page_w - 40, page_h - 60)
+
+    # ---- Compute totals ----------------------------------------------------
     panels = roof.get("roof_panels", [])
     trim_totals = sum_edges_by_type(roof)
     total_sheet_lf = sum(
@@ -2304,82 +2486,85 @@ def _render_page3(
     coverage_ft = float(roof.get("coverage_width_in", 24.0)) / 12.0
     sheet_area_sf = total_sheet_lf * coverage_ft
 
-    # Roof area: each un-rotated panel polygon is in METERS (boundary_3d
-    # is meters), so polygon_area_2d returns m^2. Convert to sqft, then to
-    # squares (1 SQ = 100 sqft).
+    # Roof area: boundary_3d is meters, so polygon_area_2d returns m^2.
     roof_area_sf = 0.0
     for s in panels:
         outline = _panel_outline_2d(s)
         if outline.shape[0] >= 3:
             roof_area_sf += polygon_area_2d(outline) * SQM_TO_SQFT
-    roof_area_sq = roof_area_sf / 100.0
 
-    # ---- Right column: ESTIMATE INFO / TRIM TAKEOFF / SS TRIM stacked ----
-    # Consolidated so the left side opens up for the panel grid.
-    total_sheet_count = sum(len(p.get("sheets", [])) for p in panels)
-    col_x = page_w - 300
+    # ---- Right column: stacked modern cards --------------------------------
     col_w = 260
-    info_rows: list[tuple[str, str]] = [
-        ("ESTIMATE #",     str(meta["estimate_number"])),
-        ("TOTAL SHEETS",   f"{total_sheet_count}"),
-        ("ROOF AREA (SQ)", f"{roof_area_sq:.1f}"),
-        ("PRIMARY SLOPE",  str(roof.get("primary_slope", ""))),
-        ("SECONDARY SLOPE",str(roof.get("secondary_slope", ""))),
-        ("COVERAGE (IN)",  f"{roof.get('coverage_width_in', 0):.0f}"),
-        ("SHEET LF",       feet_to_ft_in(total_sheet_lf)),
-        ("SHEET AREA (SF)",f"{sheet_area_sf:.0f}"),
-        ("WASTE %",        f"{roof.get('waste_pct', 0):.0f}%"),
-        ("PROFILE",        str(roof.get("profile", ""))),
-        ("GAUGE",          meta["gauge"]),
-        ("MATERIAL",       meta["material"]),
-        ("FINISH / COLOR", meta["finish_color"]),
-    ]
-    if "secondary_profile" in roof:
-        sec = roof["secondary_profile"]
-        info_rows.append(("2ND PROFILE", str(sec.get("profile", ""))))
-        info_rows.append(("2ND COVERAGE (IN)", f"{sec.get('coverage_width_in', 0):.0f}"))
-        info_rows.append(("2ND SHEET LF", feet_to_ft_in(sec.get('panel_lf', 0.0))))
-    info_h = 24 + len(info_rows) * 11
-    info_y = page_h - 70 - info_h
-    _draw_text_box(c, col_x, info_y, col_w, info_h, "ESTIMATE INFO", info_rows)
+    col_x = page_w - 40 - col_w
+    top_y = page_h - 70
 
-    # TRIM TAKEOFF + STANDING SEAM TRIM ITEMS combined into one box.
-    # Per user request — easier to scan one block than two stacked
-    # boxes that always belonged together. Empty value (("...", ""))
-    # renders as a sub-header divider inside the box.
-    trim_rows = [
-        (label, feet_to_ft_in(trim_totals.get(code, 0.0)))
+    # 1. Project Summary card — three logical groups separated by thin rules.
+    summary_sections: list[tuple[str | None, list[tuple[str, str]]]] = [
+        (None, [
+            ("Estimate #", str(meta["estimate_number"]) or "—"),
+            ("Total Linear Feet", feet_to_ft_in(total_sheet_lf)),
+            ("Total Square Feet", f"{roof_area_sf:,.0f}"),
+        ]),
+        (None, [
+            ("Primary Slope", str(roof.get("primary_slope", "")) or "—"),
+            ("Secondary Slope", str(roof.get("secondary_slope", "")) or "—"),
+        ]),
+        (None, [
+            ("Panel Width (IN)", f"{roof.get('coverage_width_in', 0):.0f}"),
+            ("Panel Profile", str(roof.get("profile", "")) or "—"),
+            ("Panel Gauge", meta["gauge"]),
+            ("Material", meta["material"]),
+            ("Color", meta["finish_color"]),
+        ]),
+    ]
+    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Project Summary",
+                              summary_sections)
+    top_y -= h + 12
+
+    # 2. Trim Takeoff card — Standard / Standing Seam grouped sections.
+    standard_rows = [
+        (_trim_label_titlecase(label), feet_to_ft_in(trim_totals.get(code, 0.0)))
         for label, code in TRIM_TAKEOFF_ORDER
         if trim_totals.get(code, 0.0) > 0
     ]
     ss_rows = [
-        (name, feet_to_ft_in(formula(trim_totals)))
+        (name.title(), feet_to_ft_in(formula(trim_totals)))
         for name, formula in trim_formulas.items()
     ]
-    combined_rows: list[tuple[str, str]] = list(trim_rows)
+    takeoff_sections: list[tuple[str | None, list[tuple[str, str]]]] = []
+    if standard_rows:
+        takeoff_sections.append(("Standard Trim Items", standard_rows))
     if ss_rows:
-        combined_rows.append(("Standing Seam Trim Items", ""))
-        combined_rows.extend(ss_rows)
-    # +18 below to absorb the sub-header row's extra spacing.
-    trim_h = 24 + len(combined_rows) * 11 + (18 if ss_rows else 0)
-    trim_y = info_y - 16 - trim_h
-    _draw_text_box(c, col_x, trim_y, col_w, trim_h, "TRIM TAKEOFF (LF)", combined_rows)
-    ss_y = trim_y  # downstream code that anchors off ss_y still works
+        takeoff_sections.append(("Standing Seam Trim Items", ss_rows))
+    if not takeoff_sections:
+        takeoff_sections = [(None, [("—", "")])]
+    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Trim Takeoff (LF)",
+                              takeoff_sections)
+    top_y -= h + 12
 
-    # COIL REQUIREMENTS: installer-facing "what coil do I need to order?"
-    # block. Runs the coil_calc inverse solver on total_sheet_lf (primary +
-    # optional secondary) and prints OD / weight so the shop can pull stock.
+    # 3. Trim Codes legend — two-column reference.
+    code_entries = [
+        (code, _trim_label_titlecase(label))
+        for label, code in EDGE_CODE.items()
+    ]
+    h = _draw_codes_legend_card(c, col_x, top_y, col_w, "Trim Codes",
+                                code_entries)
+    top_y -= h + 12
+
+    # 4. Coil Requirements — kept on the page; same modern card style.
     coil_rows = _coil_rows_for_page3(roof, total_sheet_lf)
-    coil_h = 24 + len(coil_rows) * 11
-    coil_y = ss_y - 16 - coil_h
-    _draw_text_box(c, col_x, coil_y, col_w, coil_h,
-                   "COIL REQUIREMENTS", coil_rows)
+    if coil_rows:
+        coil_sections: list[tuple[str | None, list[tuple[str, str]]]] = [
+            (None, [(label, value) for label, value in coil_rows]),
+        ]
+        _draw_grouped_kv_card(c, col_x, top_y, col_w, "Coil Requirements",
+                              coil_sections)
 
     # ---- Panel grid: fills everything to the LEFT of the right column ----
     grid_x0 = 40
     grid_y0 = 60
     grid_w = col_x - grid_x0 - 20
-    grid_h = page_h - 70 - grid_y0  # header at top
+    grid_h = page_h - 70 - grid_y0
 
     _draw_sheet_grid(c, panels, grid_x0, grid_y0, grid_w, grid_h)
 
@@ -3458,15 +3643,13 @@ def roof_dict_from_pipeline(
 
     coverage_ft = coverage_width_in / 12.0
 
-    # Phase 4: optional learned edge classifier. Always behind a flag.
-    # Import is local so a missing edge_classifier package or
-    # uninstalled xgboost can't break startup.
-    try:
-        from .edge_classifier import classifier_available, predict_edges
-        _edge_clf_on = classifier_available()
-    except Exception:
-        _edge_clf_on = False
-        predict_edges = None  # type: ignore
+    # Edge labels come from two sources only:
+    #   1. The labeler's per-edge user_edge_types (authoritative when set).
+    #   2. The geometric _classify_panel_edges fallback for any edge the
+    #      user didn't label.
+    # The Phase 4 learned classifier was removed from this path because it
+    # over-rode user intent (e.g. mis-tagging gables as RIDGE/RC), which
+    # propagated into the shop-drawing trim quantities.
 
     # Per-panel "match this panel's run direction to another panel's"
     # overrides come in via project_meta. Same shape as user_edge_types:
@@ -3489,41 +3672,9 @@ def roof_dict_from_pipeline(
         # classifier returns low confidence on a particular edge.
         types = _classify_panel_edges(poly, others, z_min, z_max)
 
-        # Phase 4 inference. predict_edges returns one (label, conf) per
-        # edge; an empty label means "below confidence threshold —
-        # caller should fall back to the rule for THIS edge only" per
-        # the spec. Hard-fail safe: if the classifier raises or returns
-        # None, we keep using the rule-derived `types`.
-        if _edge_clf_on and predict_edges is not None:
-            try:
-                clf_predictions = predict_edges(
-                    pid, poly, plane, polygons, planes,
-                    sample_id=project_meta.get("sample_id"),
-                )
-            except Exception as exc:
-                log.warning("edge_classifier crashed on panel %d: %s", pid, exc)
-                clf_predictions = None
-            if clf_predictions and len(clf_predictions) == poly.shape[0]:
-                for i, (label, _conf) in enumerate(clf_predictions):
-                    if label:
-                        # Convert lowercase label to uppercase EDGE_CODE
-                        # key (eave -> EAVE, hip_cap -> HIP, etc).
-                        # rake -> GABLE per the recent display rename.
-                        mapping = {
-                            "eave": "EAVE",
-                            "rake": "GABLE",
-                            "ridge": "RIDGE",
-                            "hip": "HIP",
-                            "hip_cap": "HIP",
-                            "valley": "VALLEY",
-                            "wall": "SIDEWALL",
-                        }
-                        mapped = mapping.get(label.lower(), label.upper())
-                        types[i] = mapped
-
         # User-supplied labels from the labeler override the geometric
-        # classifier AND the learned classifier per-edge. Empty /
-        # missing entries fall back to whatever was just decided.
+        # classifier per-edge. Empty / missing entries fall back to the
+        # geometric inference for that one edge.
         user_types = user_edge_types.get(pid)
         if user_types and len(user_types) == poly.shape[0]:
             for i, ut in enumerate(user_types):
@@ -3653,7 +3804,7 @@ def roof_dict_from_pipeline(
         for k in ("_pid", "_polygon", "_plane", "_kept_types", "_run_dir_xy"):
             p.pop(k, None)
 
-    return {
+    out: dict = {
         "estimate_number": project_meta.get("estimate_number", "AUTO-0001"),
         "project_name": project_meta.get("project_name", "ROOF PROTOTYPE"),
         "project_address": project_meta.get("project_address", "ADDRESS UNKNOWN"),
@@ -3664,6 +3815,10 @@ def roof_dict_from_pipeline(
         "waste_pct": waste_pct,
         "roof_panels": panels,
     }
+    drawn_by = project_meta.get("drawn_by")
+    if drawn_by:
+        out["drawn_by"] = drawn_by
+    return out
 
 
 if __name__ == "__main__":
