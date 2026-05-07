@@ -652,6 +652,23 @@ CARD_GROUP_LABEL_H = 9.0
 CARD_SECTION_GAP = 7.0
 
 
+def _draw_tracked_string(
+    c: pdfcanvas.Canvas, x: float, y: float, text: str,
+    *, font: str, size: float, char_space: float,
+) -> None:
+    """drawString with letter-spacing.
+
+    Canvas itself doesn't expose setCharSpace in this ReportLab build, but
+    PDFTextObject does — so we render through a text object for the small
+    tracked-caps headings that the modern card style uses.
+    """
+    t = c.beginText(x, y)
+    t.setFont(font, size)
+    t.setCharSpace(char_space)
+    t.textOut(text)
+    c.drawText(t)
+
+
 def _draw_card_frame(
     c: pdfcanvas.Canvas, x: float, top_y: float, w: float, h: float,
     title: str,
@@ -669,9 +686,8 @@ def _draw_card_frame(
     c.line(x, bar_y, x + w, bar_y)
     c.setFillColor(CARD_TITLE_FG)
     c.setFont(FONT_BOLD, 7.5)
-    c.setCharSpace(1.2)
-    c.drawString(x + CARD_PAD_X, bar_y + 5, title.upper())
-    c.setCharSpace(0)
+    _draw_tracked_string(c, x + CARD_PAD_X, bar_y + 5, title.upper(),
+                         font=FONT_BOLD, size=7.5, char_space=1.2)
     c.setFillColor(colors.black)
 
 
@@ -713,9 +729,8 @@ def _draw_grouped_kv_card(
         if group is not None:
             c.setFont(FONT_BOLD, 7)
             c.setFillColor(CARD_GROUP_FG)
-            c.setCharSpace(0.8)
-            c.drawString(inner_l, cy, group.upper())
-            c.setCharSpace(0)
+            _draw_tracked_string(c, inner_l, cy, group.upper(),
+                                 font=FONT_BOLD, size=7, char_space=0.8)
             cy -= CARD_GROUP_LABEL_H
         for label, value in rows:
             c.setFont(FONT, 8.5)
@@ -777,9 +792,8 @@ def _draw_meta_strip(
         cx = x0 + i * cell_w
         c.setFont(FONT_BOLD, 6.5)
         c.setFillColor(colors.HexColor("#888888"))
-        c.setCharSpace(1.2)
-        c.drawString(cx, top_y, label.upper())
-        c.setCharSpace(0)
+        _draw_tracked_string(c, cx, top_y, label.upper(),
+                             font=FONT_BOLD, size=6.5, char_space=1.2)
         c.setFont(FONT_BOLD, 9.5)
         c.setFillColor(CARD_VALUE_FG)
         c.drawString(cx, top_y - 12, value)
