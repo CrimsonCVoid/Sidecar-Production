@@ -2580,12 +2580,166 @@ def _render_page3(
     grid_w = col_x - grid_x0 - 20
     grid_h = page_h - 70 - grid_y0
 
-    _draw_sheet_grid(c, panels, grid_x0, grid_y0, grid_w, grid_h)
+    _draw_plane_cut_grid(c, panels, grid_x0, grid_y0, grid_w, grid_h)
 
     # ---- Disclaimer at the very bottom ----
     c.setFont(FONT_ITALIC, 6)
     c.setFillColor(colors.HexColor("#444444"))
     _draw_wrapped(c, DISCLAIMER, 40, 28, page_w - 80, line_h=8.0, font=FONT_ITALIC, size=6.0)
+    c.setFillColor(colors.black)
+
+
+def _plane_cut_groups(panel: dict) -> list[tuple[float, int]]:
+    """Per-plane equivalent of _collect_cut_groups.
+
+    Returns ``[(length_ft, qty)]`` sorted longest first, with sheets
+    bucketed to the nearest inch (matches the displayed precision so
+    sub-inch float drift never splits identical lengths into separate rows).
+    """
+    from collections import Counter
+    counter: Counter[int] = Counter()
+    for s in panel.get("sheets", []):
+        L = float(s.get("length_ft", 0.0))
+        if L > 0:
+            counter[int(round(L * 12.0))] += 1
+    return [(k / 12.0, q) for k, q in sorted(counter.items(), reverse=True)]
+
+
+def _draw_plane_cut_grid(
+    c: pdfcanvas.Canvas, panels: list[dict],
+    x0: float, y0: float, w: float, h: float,
+) -> None:
+    """Per-plane cut-list cards tiled in a flow grid.
+
+    Each plane gets its own card with a header (plane label · sheet count ·
+    total LF) and a length × qty table styled like the TOTAL CUT LIST page.
+    Cards flow left-to-right, wrapping to a new row when the row width
+    exceeds ``w``. Long sheet-length lists fold into a second column inside
+    the card so a plane with many unique lengths doesn't blow up the row
+    height.
+    """
+    if not panels:
+        return
+
+    # Build plane records: (label, groups, n_sheets, total_lf).
+    planes: list[tuple[str, list[tuple[float, int]], int, float]] = []
+    for i, p in enumerate(panels):
+        groups = _plane_cut_groups(p)
+        if not groups:
+            continue
+        n_sheets = sum(q for _, q in groups)
+        total_lf = sum(L * q for L, q in groups)
+        planes.append((f"Plane {i + 1}", groups, n_sheets, total_lf))
+
+    if not planes:
+        return
+
+    # ---- Card geometry ----------------------------------------------------
+    card_w = 220.0
+    header_h = 22.0
+    row_h = 13.0
+    pad_x = 10.0
+    pad_top = 6.0
+    pad_bottom = 8.0
+    col_gap_outer = 16.0
+    row_gap = 12.0
+    col_gap_inner = 8.0
+    rows_per_subcol_max = 16
+
+    def _card_layout(n_groups: int) -> tuple[int, int, float]:
+        """Return (n_subcols, rows_per_subcol, card_h) for n length groups."""
+        n_subcols = max(1, math.ceil(n_groups / rows_per_subcol_max))
+        rows_per_subcol = math.ceil(n_groups / n_subcols)
+        ch = header_h + pad_top + rows_per_subcol * row_h + pad_bottom
+        return n_subcols, rows_per_subcol, ch
+
+    layouts = [_card_layout(len(g)) for _, g, _, _ in planes]
+    card_heights = [layout[2] for layout in layouts]
+
+    # ---- Flow layout: pack cards into rows --------------------------------
+    rows: list[list[int]] = []
+    current: list[int] = []
+    used = 0.0
+    for i in range(len(planes)):
+        need = card_w + (col_gap_outer if current else 0.0)
+        if current and used + need > w:
+            rows.append(current)
+            current = [i]
+            used = card_w
+        else:
+            current.append(i)
+            used += need
+    if current:
+        rows.append(current)
+
+    # ---- Render -----------------------------------------------------------
+    cy_top = y0 + h
+    for row in rows:
+        row_max_h = max(card_heights[i] for i in row)
+        if cy_top - row_max_h < y0:
+            break  # out of vertical space — drop remaining rows
+        cy_top -= row_max_h
+        cx = x0
+        for i in row:
+            label, groups, n_sheets, total_lf = planes[i]
+            n_subcols, rows_per_subcol, ch = layouts[i]
+
+            # Card frame
+            card_y = cy_top + (row_max_h - ch)
+            c.setStrokeColor(CARD_BORDER)
+            c.setLineWidth(0.5)
+            c.rect(cx, card_y, card_w, ch, stroke=1, fill=0)
+
+            # Header bar
+            hdr_y = card_y + ch - header_h
+            c.setFillColor(CARD_BAR_FILL)
+            c.rect(cx, hdr_y, card_w, header_h, stroke=0, fill=1)
+            c.setStrokeColor(CARD_BORDER)
+            c.setLineWidth(0.5)
+            c.line(cx, hdr_y, cx + card_w, hdr_y)
+            # Title left
+            c.setFont(FONT_BOLD, 9.5)
+            c.setFillColor(CARD_TITLE_FG)
+            c.drawString(cx + pad_x, hdr_y + 7, label)
+            # Subtitle right
+            c.setFont(FONT, 7.5)
+            c.setFillColor(CARD_LABEL_FG)
+            c.drawRightString(
+                cx + card_w - pad_x, hdr_y + 7,
+                f"{n_sheets} sheets · {feet_to_ft_in(total_lf)}",
+            )
+
+            # Body: column-major (top→bottom of subcol 1, then subcol 2…)
+            content_top = hdr_y - pad_top
+            usable_w = card_w - 2 * pad_x
+            subcol_w = (usable_w - (n_subcols - 1) * col_gap_inner) / n_subcols
+            for idx, (L, qty) in enumerate(groups):
+                sub = idx // rows_per_subcol
+                local_row = idx % rows_per_subcol
+                sub_x = cx + pad_x + sub * (subcol_w + col_gap_inner)
+                row_y = content_top - (local_row + 1) * row_h + 3
+                # Zebra stripe for readability
+                if local_row % 2 == 1:
+                    c.setFillColor(colors.HexColor("#FAFAFA"))
+                    c.rect(sub_x - 2, row_y - 3, subcol_w + 4, row_h,
+                           stroke=0, fill=1)
+                # # column
+                c.setFont(FONT, 7.5)
+                c.setFillColor(colors.HexColor("#999999"))
+                c.drawString(sub_x, row_y, f"{idx + 1}")
+                # length
+                c.setFont(FONT_BOLD, 8.5)
+                c.setFillColor(CARD_VALUE_FG)
+                c.drawString(sub_x + 18, row_y, feet_to_ft_in(L))
+                # qty
+                c.setFont(FONT, 8.5)
+                qty_color = (colors.HexColor("#0a5") if qty > 1
+                             else colors.HexColor("#666666"))
+                c.setFillColor(qty_color)
+                c.drawRightString(sub_x + subcol_w, row_y, f"× {qty}")
+
+            cx += card_w + col_gap_outer
+        cy_top -= row_gap
     c.setFillColor(colors.black)
 
 
@@ -3234,8 +3388,7 @@ def _render_page_orthographic_views(
     c.drawString(
         40, page_h - 64,
         "Side-by-side: Google aerial on the left, top-down 3D "
-        "plan on the right. Panel colors on the plan are sampled from "
-        "the satellite ortho so the two views read as the same roof.",
+        "plan on the right.",
     )
     c.setFillColor(colors.black)
 
