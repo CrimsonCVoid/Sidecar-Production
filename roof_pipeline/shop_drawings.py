@@ -3834,19 +3834,28 @@ def roof_dict_from_pipeline(
         poly = polygons[pid]
         plane = planes[pid]
         others = [polygons[other] for other in panel_ids if other != pid]
-        # Geometric classifier always runs — its output is the per-edge
-        # fallback when the learned classifier is off OR the learned
-        # classifier returns low confidence on a particular edge.
-        types = _classify_panel_edges(poly, others, z_min, z_max)
+        # Geometric classifier kept available but DISABLED for PDF output —
+        # user-supplied labels from the labeler are authoritative. Unlabeled
+        # edges render with no 2-letter code (rather than a guessed HIP/RIDGE
+        # that mis-represents valleys, gables, etc.). Call retained for
+        # parity but its result is discarded.
+        _classify_panel_edges(poly, others, z_min, z_max)  # disabled: result ignored
+        types: list[str] = [""] * poly.shape[0]
 
-        # User-supplied labels from the labeler override the geometric
-        # classifier per-edge. Empty / missing entries fall back to the
-        # geometric inference for that one edge.
+        # User labels are the single source of truth. Length mismatch is
+        # surfaced as a warning rather than silently dropping the whole
+        # panel's labels — apply the overlapping prefix.
         user_types = user_edge_types.get(pid)
-        if user_types and len(user_types) == poly.shape[0]:
-            for i, ut in enumerate(user_types):
-                if ut:
-                    types[i] = ut
+        if user_types:
+            if len(user_types) != poly.shape[0]:
+                log.warning(
+                    "panel %d: user_edge_types length %d != polygon vertex count %d; "
+                    "applying overlapping prefix only",
+                    pid, len(user_types), poly.shape[0],
+                )
+            for i in range(min(len(user_types), poly.shape[0])):
+                if user_types[i]:
+                    types[i] = user_types[i]
 
         # Drop degenerate edges (corner-snap can collapse two clicks into
         # one position). Keep boundary vertices and edge labels in lockstep:
