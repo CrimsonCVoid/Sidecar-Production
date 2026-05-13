@@ -819,7 +819,7 @@ def _render_page_wireframe(
     `with_dimensions=True`: same outlines + each edge labeled with its
     true 3D length in ft-in.
     """
-    page_w, page_h = ANSI_B_PORTRAIT
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
 
     M_TO_FT = 3.280839895
@@ -955,7 +955,7 @@ def _render_page1(
     c: pdfcanvas.Canvas, roof: dict,
     page_num: int = 1, total_pages: int = 4,
 ) -> None:
-    page_w, page_h = ANSI_B_PORTRAIT
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
 
     panels = roof.get("roof_panels", [])
@@ -2283,7 +2283,7 @@ def _render_page2(
     always a 2-column x 3-row grid (last page may be partial). The caller
     invokes once per chunk and handles showPage() between them.
     """
-    page_w, page_h = LETTER
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
     meta = _meta(roof)
 
@@ -2320,8 +2320,8 @@ def _render_page2(
     margin_x = 36
     top_y = page_h - 90
     bottom_y = 60
-    cols = 2
-    rows_per_page = 3
+    cols = 3
+    rows_per_page = 2
     gap_x = 32
     gap_y = 26
     slot_w = (page_w - 2 * margin_x - gap_x) / cols
