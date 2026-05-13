@@ -2423,7 +2423,11 @@ def _draw_panel_edge_diagram(
         p2 = outline_pg[(i + 1) % n]
         code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
         length_ft = float(edge.get("length_ft", 0.0))
-        text = f"({code})-{feet_to_ft_in(length_ft)}"
+        length_str = feet_to_ft_in(length_ft)
+        # Drop the empty (code)- prefix when this edge has no user label
+        # (which now happens whenever an unlabeled edge is not inherited
+        # from a shared neighbor).
+        text = f"({code})-{length_str}" if code else length_str
         specs.append(_EdgeLabelSpec(p1, p2, centroid_pg, text, base_size=7.0))
 
     roof_edges_pg = [(outline_pg[i], outline_pg[(i + 1) % n]) for i in range(n)]
@@ -2531,48 +2535,12 @@ def _render_page3(
             ("Color", meta["finish_color"]),
         ]),
     ]
-    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Project Summary",
-                              summary_sections)
-    top_y -= h + 12
-
-    # 2. Trim Takeoff card — Standard / Standing Seam grouped sections.
-    standard_rows = [
-        (_trim_label_titlecase(label), feet_to_ft_in(trim_totals.get(code, 0.0)))
-        for label, code in TRIM_TAKEOFF_ORDER
-        if trim_totals.get(code, 0.0) > 0
-    ]
-    ss_rows = [
-        (name.title(), feet_to_ft_in(formula(trim_totals)))
-        for name, formula in trim_formulas.items()
-    ]
-    takeoff_sections: list[tuple[str | None, list[tuple[str, str]]]] = []
-    if standard_rows:
-        takeoff_sections.append(("Standard Trim Items", standard_rows))
-    if ss_rows:
-        takeoff_sections.append(("Standing Seam Trim Items", ss_rows))
-    if not takeoff_sections:
-        takeoff_sections = [(None, [("—", "")])]
-    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Trim Takeoff (LF)",
-                              takeoff_sections)
-    top_y -= h + 12
-
-    # 3. Trim Codes legend — two-column reference.
-    code_entries = [
-        (code, _trim_label_titlecase(label))
-        for label, code in EDGE_CODE.items()
-    ]
-    h = _draw_codes_legend_card(c, col_x, top_y, col_w, "Trim Codes",
-                                code_entries)
-    top_y -= h + 12
-
-    # 4. Coil Requirements — kept on the page; same modern card style.
-    coil_rows = _coil_rows_for_page3(roof, total_sheet_lf)
-    if coil_rows:
-        coil_sections: list[tuple[str | None, list[tuple[str, str]]]] = [
-            (None, [(label, value) for label, value in coil_rows]),
-        ]
-        _draw_grouped_kv_card(c, col_x, top_y, col_w, "Coil Requirements",
-                              coil_sections)
+    # Right column: Project Summary only. Trim Takeoff / Trim Codes legend
+    # / Coil Requirements were removed at user request — those numbers live
+    # on dedicated pages (Total Cut List, Combined Edge Detail) and on the
+    # web app coil calculator.
+    _draw_grouped_kv_card(c, col_x, top_y, col_w, "Project Summary",
+                          summary_sections)
 
     # ---- Panel grid: fills everything to the LEFT of the right column ----
     grid_x0 = 40
@@ -3795,6 +3763,28 @@ def roof_dict_from_pipeline(
         project_meta.get("user_edge_types") or {}
     )
 
+    # Pre-pass: build a shared-edge label map so unlabeled edges on one
+    # panel can inherit a label from a neighbor panel that DID label the
+    # shared edge. Without this, a ridge labeled only on panel 1 renders
+    # correctly on panel 1 but as a bare length on panel 2's diagram.
+    shared_label_map: dict[tuple, str] = {}
+    for src_pid, src_types in user_edge_types.items():
+        if not src_types:
+            continue
+        src_poly = polygons.get(src_pid)
+        if src_poly is None:
+            continue
+        n_src = src_poly.shape[0]
+        for i in range(min(len(src_types), n_src)):
+            label = src_types[i]
+            if not label:
+                continue
+            key = _shared_edge_key(src_poly[i], src_poly[(i + 1) % n_src])
+            # First non-empty label wins. If two adjacent panels disagree
+            # on a shared edge label, the lower panel_id's wins -- rare in
+            # practice; users typically only label one side of a shared edge.
+            shared_label_map.setdefault(key, label)
+
     # Z-range across the entire roof, used by the eave/ridge classifier
     all_z = np.concatenate([poly[:, 2] for poly in polygons.values()])
     z_min, z_max = float(all_z.min()), float(all_z.max())
@@ -3834,19 +3824,38 @@ def roof_dict_from_pipeline(
         poly = polygons[pid]
         plane = planes[pid]
         others = [polygons[other] for other in panel_ids if other != pid]
-        # Geometric classifier always runs — its output is the per-edge
-        # fallback when the learned classifier is off OR the learned
-        # classifier returns low confidence on a particular edge.
-        types = _classify_panel_edges(poly, others, z_min, z_max)
+        # Geometric classifier kept available but DISABLED for PDF output —
+        # user-supplied labels from the labeler are authoritative. Unlabeled
+        # edges render with no 2-letter code (rather than a guessed HIP/RIDGE
+        # that mis-represents valleys, gables, etc.). Call retained for
+        # parity but its result is discarded.
+        _classify_panel_edges(poly, others, z_min, z_max)  # disabled: result ignored
+        types: list[str] = [""] * poly.shape[0]
 
-        # User-supplied labels from the labeler override the geometric
-        # classifier per-edge. Empty / missing entries fall back to the
-        # geometric inference for that one edge.
+        # User labels are the single source of truth. Length mismatch is
+        # surfaced as a warning rather than silently dropping the whole
+        # panel's labels — apply the overlapping prefix.
         user_types = user_edge_types.get(pid)
-        if user_types and len(user_types) == poly.shape[0]:
-            for i, ut in enumerate(user_types):
-                if ut:
-                    types[i] = ut
+        if user_types:
+            if len(user_types) != poly.shape[0]:
+                log.warning(
+                    "panel %d: user_edge_types length %d != polygon vertex count %d; "
+                    "applying overlapping prefix only",
+                    pid, len(user_types), poly.shape[0],
+                )
+            for i in range(min(len(user_types), poly.shape[0])):
+                if user_types[i]:
+                    types[i] = user_types[i]
+
+        # Shared-edge inheritance: if this panel left an edge blank but a
+        # neighbor labeled the same shared edge, adopt the neighbor's label.
+        for i in range(poly.shape[0]):
+            if types[i]:
+                continue
+            key = _shared_edge_key(poly[i], poly[(i + 1) % poly.shape[0]])
+            inherited = shared_label_map.get(key)
+            if inherited:
+                types[i] = inherited
 
         # Drop degenerate edges (corner-snap can collapse two clicks into
         # one position). Keep boundary vertices and edge labels in lockstep:
@@ -3912,7 +3921,7 @@ def roof_dict_from_pipeline(
         )
 
         panels.append({
-            "panel_id": f"panel_{pid}",
+            "panel_id": f"Plane {pid}",
             "_pid": pid,                                 # internal: integer id for match-pass lookup
             "_polygon": cleaned_poly,                    # internal: kept for re-layout
             "_plane": plane,                             # internal: kept for re-layout
