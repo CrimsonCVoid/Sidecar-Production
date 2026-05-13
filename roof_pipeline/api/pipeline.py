@@ -620,12 +620,18 @@ async def generate_pdf(
                 ) from exc
             raise
 
-        # Find the cutsheets PDF
-        pdf_path = output_paths.get("cutsheets_pdf")
+        # Pull the shop drawings PDF (ANSI B, 9 pages — what users
+        # actually want from this endpoint). `run_pipeline` returns
+        # three PDFs keyed `pdf` / `ts_pdf` / `shop_pdf`; the old
+        # `cutsheets_pdf` key never existed, so this used to fall
+        # through to `glob("*.pdf")[0]`, which is filesystem-order
+        # dependent and happened to return shop_drawings.pdf only by
+        # luck on the current droplet.
+        pdf_path = output_paths.get("shop_pdf")
         if pdf_path is None or not pdf_path.exists():
-            # Try any PDF in output
-            pdfs = list(out_dir.glob("*.pdf"))
-            pdf_path = pdfs[0] if pdfs else None
+            # Defensive fallback if shop drawings somehow weren't
+            # produced this run — prefer shop > letter > ts.
+            pdf_path = output_paths.get("pdf") or output_paths.get("ts_pdf")
 
         if pdf_path is None or not pdf_path.exists():
             raise HTTPException(status_code=500, detail="Pipeline ran but no PDF was generated")
