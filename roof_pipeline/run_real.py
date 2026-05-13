@@ -75,6 +75,8 @@ def run_pipeline(
     rgb_bytes: bytes | None = None,
     installer_start_edge: str | None = None,
     drawn_by: str | None = None,
+    material: str | None = None,
+    finish_color: str | None = None,
 ) -> dict[str, Path]:
     """Execute the full roof pipeline on pre-loaded data arrays.
 
@@ -304,6 +306,10 @@ def run_pipeline(
     if rgb_image is not None:
         roof_dict["rgb_image"] = rgb_image
         roof_dict["rgb_res_m"] = res_m
+    if material:
+        roof_dict["material"] = material
+    if finish_color:
+        roof_dict["finish_color"] = finish_color
     shop_pdf_path = generate_shop_drawings(
         roof_dict, out_dir / "shop_drawings.pdf",
     )

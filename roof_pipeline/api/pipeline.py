@@ -574,6 +574,8 @@ async def generate_pdf(
 
         drawn_by = _resolve_drawn_by(supabase, sample_id)
 
+        material_qs = request.query_params.get("material") or None
+        color_qs = request.query_params.get("color") or None
         try:
             output_paths = await asyncio.to_thread(
                 run_pipeline,
@@ -588,6 +590,8 @@ async def generate_pdf(
                 estimate_number=sample_id[:8],
                 rgb_bytes=rgb_bytes,
                 drawn_by=drawn_by,
+                material=material_qs,
+                finish_color=color_qs,
             )
         except Exception as exc:
             # Convert known labeler-data failures into clean 4xxs instead
@@ -905,6 +909,8 @@ async def generate_finalized_pdf(
             profile=profile,
             rgb_bytes=rgb_bytes,
             drawn_by=drawn_by,
+            material=request.query_params.get("material") or None,
+            finish_color=request.query_params.get("color") or None,
         )
 
         pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")
