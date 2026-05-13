@@ -1357,6 +1357,17 @@ def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | Non
 
 EAVE_TYPES: tuple[str, ...] = ("EAVE",)
 RAKE_TYPES: tuple[str, ...] = ("RAKE", "GABLE")
+RIDGE_TYPES: tuple[str, ...] = ("RIDGE",)
+
+# When a labeled ridge is present at >= this much total length, it
+# trumps the gradient-derived run direction. Same defensive bar as
+# EAVE_MIN_TOTAL_LENGTH_M — below 0.6 m a single mis-clicked corner
+# can swing the bearing wildly.
+RIDGE_MIN_TOTAL_LENGTH_M = 0.6
+# Logged-only sanity check: if ridge-perp and eave-perp disagree by
+# more than this, surface a warning so we can spot mis-labels. We
+# still trust ridge in that case (user spec).
+RIDGE_EAVE_DISAGREE_WARN_DEG = 5.0
 
 # A clean, high-confidence eave label is allowed to override the
 # gradient-derived run direction when they disagree visibly. 3° is the
@@ -1386,6 +1397,38 @@ def _eave_bearing_with_quality(
     seg_count = 0
     for i in range(n):
         if str(edge_types[i]).upper() not in {t.upper() for t in EAVE_TYPES}:
+            continue
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        d = b - a
+        L = float(math.hypot(d[0], d[1]))
+        if L < 1e-9:
+            continue
+        theta = math.atan2(float(d[1]), float(d[0])) % math.pi
+        sx += L * math.cos(2 * theta)
+        sy += L * math.sin(2 * theta)
+        total_w += L
+        seg_count += 1
+    if total_w < 1e-9 or (abs(sx) < 1e-9 and abs(sy) < 1e-9):
+        return None
+    return (math.atan2(sy, sx) / 2.0) % math.pi, total_w, seg_count
+
+
+def _ridge_bearing_with_quality(
+    polygon_xy: np.ndarray,
+    edge_types: list[str],
+) -> tuple[float, float, int] | None:
+    """Length-weighted circular mean of RIDGE edges + total length + count.
+    Mirrors _eave_bearing_with_quality. None when no ridge edges."""
+    n = len(polygon_xy)
+    if n < 2 or len(edge_types) != n:
+        return None
+    sx, sy = 0.0, 0.0
+    total_w = 0.0
+    seg_count = 0
+    targets = {t.upper() for t in RIDGE_TYPES}
+    for i in range(n):
+        if str(edge_types[i]).upper() not in targets:
             continue
         a = polygon_xy[i]
         b = polygon_xy[(i + 1) % n]
@@ -1462,7 +1505,51 @@ def _resolve_run_direction(
                 if norm > 1e-9:
                     eave_perp_unit = chosen / norm
 
-    # 1. Gradient (primary)
+    # 1. Ridge perpendicular (priority over gradient).
+    # When the user labeled the ridge with enough total length, the
+    # perpendicular to that ridge IS the down-slope axis by definition
+    # — independent of any plane-fit noise. This guarantees sheets render
+    # exactly 90° from the labeled ridge in either direction.
+    if edge_types and len(edge_types) == polygon_xy.shape[0]:
+        rq = _ridge_bearing_with_quality(polygon_xy, edge_types)
+        if rq is not None:
+            ridge_bearing_rad, ridge_total_length_m, ridge_seg_count = rq
+            rc = _length_weighted_centroid(polygon_xy, edge_types, RIDGE_TYPES)
+            if rc is not None and ridge_total_length_m >= RIDGE_MIN_TOTAL_LENGTH_M:
+                perp_a = np.array([
+                    math.cos(ridge_bearing_rad + math.pi / 2),
+                    math.sin(ridge_bearing_rad + math.pi / 2),
+                ])
+                # Sheets run AWAY from the ridge toward the face centroid
+                # (which sits down-slope from the ridge for any labeled face).
+                away_from_ridge = face_centroid - rc
+                chosen = perp_a if float(perp_a @ away_from_ridge) > 0 else -perp_a
+                norm = float(np.linalg.norm(chosen))
+                if norm > 1e-9:
+                    ridge_perp_unit = chosen / norm
+                    # Logged-only check: warn when ridge and eave disagree
+                    # noticeably so a mis-label gets surfaced. We still trust
+                    # the ridge per the user's "always 90° from ridge" rule.
+                    if (
+                        eave_perp_unit is not None
+                        and eave_total_length_m >= EAVE_MIN_TOTAL_LENGTH_M
+                    ):
+                        cos_diff = float(np.clip(
+                            ridge_perp_unit @ eave_perp_unit, -1.0, 1.0,
+                        ))
+                        diff_deg = math.degrees(math.acos(cos_diff))
+                        if diff_deg > RIDGE_EAVE_DISAGREE_WARN_DEG:
+                            log.warning(
+                                "[run-dir] ridge-perp vs eave-perp disagree by "
+                                "%.1f° (ridge_len=%.2fm segs=%d, eave_len=%.2fm "
+                                "segs=%d). Trusting ridge per design; verify "
+                                "this panel's labels.",
+                                diff_deg, ridge_total_length_m, ridge_seg_count,
+                                eave_total_length_m, eave_seg_count,
+                            )
+                    return ridge_perp_unit, "ridge_perp"
+
+    # 2. Gradient (primary fallback when no labeled ridge)
     nx, ny, nz = (
         float(plane_normal[0]),
         float(plane_normal[1]),
@@ -1511,7 +1598,7 @@ def _resolve_run_direction(
 
         return gradient_unit, "gradient"
 
-    # 2. Eave-perp fallback (only when gradient bowed out — computed
+    # 3. Eave-perp fallback (only when gradient bowed out — computed
     # at the top so we can reuse it both as the fallback and as the
     # override target above).
     if eave_perp_unit is not None:
@@ -1522,7 +1609,7 @@ def _resolve_run_direction(
         )
         return eave_perp_unit, tag
 
-    # 3. Rake-along fallback (rakes are inline with the run direction)
+    # 4. Rake-along fallback (rakes are inline with the run direction)
     if edge_types and len(edge_types) == polygon_xy.shape[0]:
         rake_bearing = _length_weighted_bearing(
             polygon_xy, edge_types, RAKE_TYPES,
@@ -1540,7 +1627,7 @@ def _resolve_run_direction(
             tag = "rake_along_low_slope" if pitch_from_vertical_deg < low_slope_pitch_deg else "rake_along_high_residual"
             return chosen / float(np.linalg.norm(chosen)), tag
 
-    # 4. Longest-edge perpendicular last resort
+    # 5. Longest-edge perpendicular last resort
     edge = _longest_edge_perp(polygon_xy)
     if edge is None:
         return np.array([1.0, 0.0]), "default_axis"
