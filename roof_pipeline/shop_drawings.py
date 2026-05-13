@@ -1136,7 +1136,10 @@ def _render_page1(
     _draw_north_arrow(c, draw_x0 + 40, draw_y0 + draw_h - 50, size=64)
 
     # ---- Title block in the lower-right corner of the page
-    tb_w = 320.0
+    # Sized for ANSI_B_LANDSCAPE: the box is wider than the legacy
+    # portrait-era 320pt block so we can show longer street addresses
+    # at full size and give the data grid cells more breathing room.
+    tb_w = 460.0
     tb_h = 130.0
     tb_x = page_w - 40 - tb_w
     tb_y = 70.0
@@ -1144,32 +1147,48 @@ def _render_page1(
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.9)
     c.rect(tb_x, tb_y, tb_w, tb_h, stroke=1, fill=0)
-    # Title rows (project name, address). Both auto-shrink to fit the
-    # title block — long addresses (full street + city + state + zip)
-    # were overflowing into the right edge of the box at the original
-    # 9pt size.
-    inner_w = tb_w - 16  # 8pt left padding + 8pt right padding
+
+    # Two-row title header. The pipeline today defaults project_name and
+    # project_address to the SAME street string, which used to render the
+    # address twice. Collapse to a single row when they match; otherwise
+    # render the project name on top and the address below it.
+    inner_w = tb_w - 20  # 10pt left + 10pt right padding
 
     def _fit(text: str, font: str, max_size: int, min_size: int) -> int:
-        """Return the largest size (max_size .. min_size) that fits inner_w."""
+        """Return the largest size (max_size..min_size) that fits inner_w."""
         for sz in range(int(max_size), int(min_size) - 1, -1):
             if c.stringWidth(text or "", font, sz) <= inner_w:
                 return sz
         return int(min_size)
 
-    name_size = _fit(meta["project_name"], FONT_BOLD, 13, 9)
-    c.setFont(FONT_BOLD, name_size)
-    c.drawString(tb_x + 8, tb_y + tb_h - 20, meta["project_name"])
+    name = (meta["project_name"] or "").strip()
+    addr = (meta["project_address"] or "").strip()
+    same = name and addr and name == addr
+    if same:
+        # Single centered title row uses the full vertical space of the
+        # header band — feels balanced when there's only one line.
+        size = _fit(addr, FONT_BOLD, 14, 10)
+        c.setFont(FONT_BOLD, size)
+        c.drawString(tb_x + 10, tb_y + tb_h - 25, addr)
+    else:
+        if name:
+            size = _fit(name, FONT_BOLD, 14, 10)
+            c.setFont(FONT_BOLD, size)
+            c.drawString(tb_x + 10, tb_y + tb_h - 20, name)
+        if addr:
+            size = _fit(addr, FONT, 10, 7)
+            c.setFont(FONT, size)
+            c.setFillColor(colors.HexColor("#444444"))
+            c.drawString(tb_x + 10, tb_y + tb_h - 36, addr)
+            c.setFillColor(colors.black)
 
-    addr_size = _fit(meta["project_address"], FONT, 9, 6)
-    c.setFont(FONT, addr_size)
-    c.drawString(tb_x + 8, tb_y + tb_h - 34, meta["project_address"])
     # Divider above the data grid
-    c.line(tb_x, tb_y + tb_h - 44, tb_x + tb_w, tb_y + tb_h - 44)
-    # 4-cell data grid: REV | DATE | DRAWN | SHEET
+    c.line(tb_x, tb_y + tb_h - 46, tb_x + tb_w, tb_y + tb_h - 46)
+    # 4-cell data grid: REV | DATE | DRAWN | SHEET. Cells are now wider
+    # so values can render at 12pt instead of squeezing.
     cell_w = tb_w / 4.0
-    grid_top = tb_y + tb_h - 44
-    grid_bot = tb_y + 28
+    grid_top = tb_y + tb_h - 46
+    grid_bot = tb_y + 30
     for i in range(1, 4):
         c.line(tb_x + i * cell_w, grid_top, tb_x + i * cell_w, grid_bot)
     c.line(tb_x, grid_bot, tb_x + tb_w, grid_bot)
@@ -1177,23 +1196,31 @@ def _render_page1(
     values = [meta["revision"], meta["date"], meta["drawn_by"], "1 OF 4"]
     for i, (lab, val) in enumerate(zip(labels, values)):
         cx = tb_x + i * cell_w + cell_w / 2.0
-        c.setFont(FONT, 7)
+        c.setFont(FONT, 7.5)
         c.setFillColor(colors.HexColor("#666666"))
-        c.drawCentredString(cx, grid_top - 11, lab)
+        c.drawCentredString(cx, grid_top - 12, lab)
         c.setFillColor(colors.black)
-        c.setFont(FONT_BOLD, 11)
-        c.drawCentredString(cx, grid_bot + 6, val)
-    # Bottom row: fabricator (optional) + estimate number
+        # Auto-shrink each value to its own cell so a long "DRAWN BY"
+        # name no longer collides with the SHEET divider.
+        val_str = str(val)
+        cell_inner = cell_w - 10
+        val_size = 12
+        while val_size > 7 and c.stringWidth(val_str, FONT_BOLD, val_size) > cell_inner:
+            val_size -= 1
+        c.setFont(FONT_BOLD, val_size)
+        c.drawCentredString(cx, grid_bot + 6, val_str)
+    # Bottom row: fabricator (optional, left) + estimate (right)
     if meta["fabricator_name"]:
         c.setFont(FONT_BOLD, 9)
-        c.drawString(tb_x + 8, tb_y + 12, meta["fabricator_name"])
+        c.drawString(tb_x + 10, tb_y + 12, meta["fabricator_name"])
     c.setFont(FONT, 9)
-    c.drawRightString(tb_x + tb_w - 8, tb_y + 12, f"Estimate {meta['estimate_number']}")
+    c.drawRightString(tb_x + tb_w - 10, tb_y + 12,
+                      f"Estimate {meta['estimate_number']}")
     # Optional CHECKED BY tucked below the divider on the right
     if meta["checked_by"] and meta["checked_by"] != "--":
         c.setFont(FONT, 7)
         c.setFillColor(colors.HexColor("#666666"))
-        c.drawRightString(tb_x + tb_w - 8, grid_bot - 12,
+        c.drawRightString(tb_x + tb_w - 10, grid_bot - 12,
                           f"CHECKED BY: {meta['checked_by']}")
         c.setFillColor(colors.black)
     c.restoreState()
