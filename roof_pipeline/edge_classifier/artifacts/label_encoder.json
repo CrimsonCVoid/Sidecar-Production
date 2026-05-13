@@ -25,7 +25,27 @@
     "shared_with_neighbor",
     "neighbor_normal_dot"
   ],
-  "cv_mean_accuracy": 0.8292941840767927,
-  "cv_std_accuracy": 0.026598498123904035,
-  "n_train_rows": 1154
+  "cv_mean_accuracy": 0.7180199835578321,
+  "cv_std_accuracy": 0.024322416225572168,
+  "n_train_rows": 1259,
+  "holdout_test_2026_05_11": {
+    "n_test_rows": 252,
+    "accuracy": 0.706,
+    "per_class_f1": {
+      "eave": 0.824,
+      "rake": 0.713,
+      "ridge": 0.754,
+      "hip": 0.642,
+      "valley": 0.386
+    },
+    "baseline_may5_accuracy_on_same_holdout": 0.484,
+    "baseline_may5_per_class_f1": {
+      "eave": 0.784,
+      "rake": 0.0,
+      "ridge": 0.437,
+      "hip": 0.0,
+      "valley": 0.0
+    },
+    "training_date_utc": "2026-05-11"
+  }
 }
