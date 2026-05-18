@@ -819,7 +819,7 @@ def _render_page_wireframe(
     `with_dimensions=True`: same outlines + each edge labeled with its
     true 3D length in ft-in.
     """
-    page_w, page_h = ANSI_B_PORTRAIT
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
 
     M_TO_FT = 3.280839895
@@ -955,7 +955,7 @@ def _render_page1(
     c: pdfcanvas.Canvas, roof: dict,
     page_num: int = 1, total_pages: int = 4,
 ) -> None:
-    page_w, page_h = ANSI_B_PORTRAIT
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
 
     panels = roof.get("roof_panels", [])
@@ -1136,7 +1136,10 @@ def _render_page1(
     _draw_north_arrow(c, draw_x0 + 40, draw_y0 + draw_h - 50, size=64)
 
     # ---- Title block in the lower-right corner of the page
-    tb_w = 320.0
+    # Sized for ANSI_B_LANDSCAPE: the box is wider than the legacy
+    # portrait-era 320pt block so we can show longer street addresses
+    # at full size and give the data grid cells more breathing room.
+    tb_w = 460.0
     tb_h = 130.0
     tb_x = page_w - 40 - tb_w
     tb_y = 70.0
@@ -1144,32 +1147,48 @@ def _render_page1(
     c.setStrokeColor(colors.black)
     c.setLineWidth(0.9)
     c.rect(tb_x, tb_y, tb_w, tb_h, stroke=1, fill=0)
-    # Title rows (project name, address). Both auto-shrink to fit the
-    # title block — long addresses (full street + city + state + zip)
-    # were overflowing into the right edge of the box at the original
-    # 9pt size.
-    inner_w = tb_w - 16  # 8pt left padding + 8pt right padding
+
+    # Two-row title header. The pipeline today defaults project_name and
+    # project_address to the SAME street string, which used to render the
+    # address twice. Collapse to a single row when they match; otherwise
+    # render the project name on top and the address below it.
+    inner_w = tb_w - 20  # 10pt left + 10pt right padding
 
     def _fit(text: str, font: str, max_size: int, min_size: int) -> int:
-        """Return the largest size (max_size .. min_size) that fits inner_w."""
+        """Return the largest size (max_size..min_size) that fits inner_w."""
         for sz in range(int(max_size), int(min_size) - 1, -1):
             if c.stringWidth(text or "", font, sz) <= inner_w:
                 return sz
         return int(min_size)
 
-    name_size = _fit(meta["project_name"], FONT_BOLD, 13, 9)
-    c.setFont(FONT_BOLD, name_size)
-    c.drawString(tb_x + 8, tb_y + tb_h - 20, meta["project_name"])
+    name = (meta["project_name"] or "").strip()
+    addr = (meta["project_address"] or "").strip()
+    same = name and addr and name == addr
+    if same:
+        # Single centered title row uses the full vertical space of the
+        # header band — feels balanced when there's only one line.
+        size = _fit(addr, FONT_BOLD, 14, 10)
+        c.setFont(FONT_BOLD, size)
+        c.drawString(tb_x + 10, tb_y + tb_h - 25, addr)
+    else:
+        if name:
+            size = _fit(name, FONT_BOLD, 14, 10)
+            c.setFont(FONT_BOLD, size)
+            c.drawString(tb_x + 10, tb_y + tb_h - 20, name)
+        if addr:
+            size = _fit(addr, FONT, 10, 7)
+            c.setFont(FONT, size)
+            c.setFillColor(colors.HexColor("#444444"))
+            c.drawString(tb_x + 10, tb_y + tb_h - 36, addr)
+            c.setFillColor(colors.black)
 
-    addr_size = _fit(meta["project_address"], FONT, 9, 6)
-    c.setFont(FONT, addr_size)
-    c.drawString(tb_x + 8, tb_y + tb_h - 34, meta["project_address"])
     # Divider above the data grid
-    c.line(tb_x, tb_y + tb_h - 44, tb_x + tb_w, tb_y + tb_h - 44)
-    # 4-cell data grid: REV | DATE | DRAWN | SHEET
+    c.line(tb_x, tb_y + tb_h - 46, tb_x + tb_w, tb_y + tb_h - 46)
+    # 4-cell data grid: REV | DATE | DRAWN | SHEET. Cells are now wider
+    # so values can render at 12pt instead of squeezing.
     cell_w = tb_w / 4.0
-    grid_top = tb_y + tb_h - 44
-    grid_bot = tb_y + 28
+    grid_top = tb_y + tb_h - 46
+    grid_bot = tb_y + 30
     for i in range(1, 4):
         c.line(tb_x + i * cell_w, grid_top, tb_x + i * cell_w, grid_bot)
     c.line(tb_x, grid_bot, tb_x + tb_w, grid_bot)
@@ -1177,23 +1196,31 @@ def _render_page1(
     values = [meta["revision"], meta["date"], meta["drawn_by"], "1 OF 4"]
     for i, (lab, val) in enumerate(zip(labels, values)):
         cx = tb_x + i * cell_w + cell_w / 2.0
-        c.setFont(FONT, 7)
+        c.setFont(FONT, 7.5)
         c.setFillColor(colors.HexColor("#666666"))
-        c.drawCentredString(cx, grid_top - 11, lab)
+        c.drawCentredString(cx, grid_top - 12, lab)
         c.setFillColor(colors.black)
-        c.setFont(FONT_BOLD, 11)
-        c.drawCentredString(cx, grid_bot + 6, val)
-    # Bottom row: fabricator (optional) + estimate number
+        # Auto-shrink each value to its own cell so a long "DRAWN BY"
+        # name no longer collides with the SHEET divider.
+        val_str = str(val)
+        cell_inner = cell_w - 10
+        val_size = 12
+        while val_size > 7 and c.stringWidth(val_str, FONT_BOLD, val_size) > cell_inner:
+            val_size -= 1
+        c.setFont(FONT_BOLD, val_size)
+        c.drawCentredString(cx, grid_bot + 6, val_str)
+    # Bottom row: fabricator (optional, left) + estimate (right)
     if meta["fabricator_name"]:
         c.setFont(FONT_BOLD, 9)
-        c.drawString(tb_x + 8, tb_y + 12, meta["fabricator_name"])
+        c.drawString(tb_x + 10, tb_y + 12, meta["fabricator_name"])
     c.setFont(FONT, 9)
-    c.drawRightString(tb_x + tb_w - 8, tb_y + 12, f"Estimate {meta['estimate_number']}")
+    c.drawRightString(tb_x + tb_w - 10, tb_y + 12,
+                      f"Estimate {meta['estimate_number']}")
     # Optional CHECKED BY tucked below the divider on the right
     if meta["checked_by"] and meta["checked_by"] != "--":
         c.setFont(FONT, 7)
         c.setFillColor(colors.HexColor("#666666"))
-        c.drawRightString(tb_x + tb_w - 8, grid_bot - 12,
+        c.drawRightString(tb_x + tb_w - 10, grid_bot - 12,
                           f"CHECKED BY: {meta['checked_by']}")
         c.setFillColor(colors.black)
     c.restoreState()
@@ -1204,7 +1231,7 @@ def _render_page1(
     c.line(40, 60, page_w - 40, 60)
     c.setFont(FONT, 7)
     c.setFillColor(colors.grey)
-    c.drawString(40, 48, "MRQ -- Material Requisition Quote (sample)")
+    # MRQ subheader removed (2026 product decision)
     c.drawRightString(page_w - 40, 48, f"Page {page_num} of {total_pages}")
     c.setFillColor(colors.black)
 
@@ -1330,6 +1357,17 @@ def _longest_edge_perp(polygon_xy: np.ndarray) -> tuple[np.ndarray, float] | Non
 
 EAVE_TYPES: tuple[str, ...] = ("EAVE",)
 RAKE_TYPES: tuple[str, ...] = ("RAKE", "GABLE")
+RIDGE_TYPES: tuple[str, ...] = ("RIDGE",)
+
+# When a labeled ridge is present at >= this much total length, it
+# trumps the gradient-derived run direction. Same defensive bar as
+# EAVE_MIN_TOTAL_LENGTH_M — below 0.6 m a single mis-clicked corner
+# can swing the bearing wildly.
+RIDGE_MIN_TOTAL_LENGTH_M = 0.6
+# Logged-only sanity check: if ridge-perp and eave-perp disagree by
+# more than this, surface a warning so we can spot mis-labels. We
+# still trust ridge in that case (user spec).
+RIDGE_EAVE_DISAGREE_WARN_DEG = 5.0
 
 # A clean, high-confidence eave label is allowed to override the
 # gradient-derived run direction when they disagree visibly. 3° is the
@@ -1359,6 +1397,38 @@ def _eave_bearing_with_quality(
     seg_count = 0
     for i in range(n):
         if str(edge_types[i]).upper() not in {t.upper() for t in EAVE_TYPES}:
+            continue
+        a = polygon_xy[i]
+        b = polygon_xy[(i + 1) % n]
+        d = b - a
+        L = float(math.hypot(d[0], d[1]))
+        if L < 1e-9:
+            continue
+        theta = math.atan2(float(d[1]), float(d[0])) % math.pi
+        sx += L * math.cos(2 * theta)
+        sy += L * math.sin(2 * theta)
+        total_w += L
+        seg_count += 1
+    if total_w < 1e-9 or (abs(sx) < 1e-9 and abs(sy) < 1e-9):
+        return None
+    return (math.atan2(sy, sx) / 2.0) % math.pi, total_w, seg_count
+
+
+def _ridge_bearing_with_quality(
+    polygon_xy: np.ndarray,
+    edge_types: list[str],
+) -> tuple[float, float, int] | None:
+    """Length-weighted circular mean of RIDGE edges + total length + count.
+    Mirrors _eave_bearing_with_quality. None when no ridge edges."""
+    n = len(polygon_xy)
+    if n < 2 or len(edge_types) != n:
+        return None
+    sx, sy = 0.0, 0.0
+    total_w = 0.0
+    seg_count = 0
+    targets = {t.upper() for t in RIDGE_TYPES}
+    for i in range(n):
+        if str(edge_types[i]).upper() not in targets:
             continue
         a = polygon_xy[i]
         b = polygon_xy[(i + 1) % n]
@@ -1435,7 +1505,51 @@ def _resolve_run_direction(
                 if norm > 1e-9:
                     eave_perp_unit = chosen / norm
 
-    # 1. Gradient (primary)
+    # 1. Ridge perpendicular (priority over gradient).
+    # When the user labeled the ridge with enough total length, the
+    # perpendicular to that ridge IS the down-slope axis by definition
+    # — independent of any plane-fit noise. This guarantees sheets render
+    # exactly 90° from the labeled ridge in either direction.
+    if edge_types and len(edge_types) == polygon_xy.shape[0]:
+        rq = _ridge_bearing_with_quality(polygon_xy, edge_types)
+        if rq is not None:
+            ridge_bearing_rad, ridge_total_length_m, ridge_seg_count = rq
+            rc = _length_weighted_centroid(polygon_xy, edge_types, RIDGE_TYPES)
+            if rc is not None and ridge_total_length_m >= RIDGE_MIN_TOTAL_LENGTH_M:
+                perp_a = np.array([
+                    math.cos(ridge_bearing_rad + math.pi / 2),
+                    math.sin(ridge_bearing_rad + math.pi / 2),
+                ])
+                # Sheets run AWAY from the ridge toward the face centroid
+                # (which sits down-slope from the ridge for any labeled face).
+                away_from_ridge = face_centroid - rc
+                chosen = perp_a if float(perp_a @ away_from_ridge) > 0 else -perp_a
+                norm = float(np.linalg.norm(chosen))
+                if norm > 1e-9:
+                    ridge_perp_unit = chosen / norm
+                    # Logged-only check: warn when ridge and eave disagree
+                    # noticeably so a mis-label gets surfaced. We still trust
+                    # the ridge per the user's "always 90° from ridge" rule.
+                    if (
+                        eave_perp_unit is not None
+                        and eave_total_length_m >= EAVE_MIN_TOTAL_LENGTH_M
+                    ):
+                        cos_diff = float(np.clip(
+                            ridge_perp_unit @ eave_perp_unit, -1.0, 1.0,
+                        ))
+                        diff_deg = math.degrees(math.acos(cos_diff))
+                        if diff_deg > RIDGE_EAVE_DISAGREE_WARN_DEG:
+                            log.warning(
+                                "[run-dir] ridge-perp vs eave-perp disagree by "
+                                "%.1f° (ridge_len=%.2fm segs=%d, eave_len=%.2fm "
+                                "segs=%d). Trusting ridge per design; verify "
+                                "this panel's labels.",
+                                diff_deg, ridge_total_length_m, ridge_seg_count,
+                                eave_total_length_m, eave_seg_count,
+                            )
+                    return ridge_perp_unit, "ridge_perp"
+
+    # 2. Gradient (primary fallback when no labeled ridge)
     nx, ny, nz = (
         float(plane_normal[0]),
         float(plane_normal[1]),
@@ -1484,7 +1598,7 @@ def _resolve_run_direction(
 
         return gradient_unit, "gradient"
 
-    # 2. Eave-perp fallback (only when gradient bowed out — computed
+    # 3. Eave-perp fallback (only when gradient bowed out — computed
     # at the top so we can reuse it both as the fallback and as the
     # override target above).
     if eave_perp_unit is not None:
@@ -1495,7 +1609,7 @@ def _resolve_run_direction(
         )
         return eave_perp_unit, tag
 
-    # 3. Rake-along fallback (rakes are inline with the run direction)
+    # 4. Rake-along fallback (rakes are inline with the run direction)
     if edge_types and len(edge_types) == polygon_xy.shape[0]:
         rake_bearing = _length_weighted_bearing(
             polygon_xy, edge_types, RAKE_TYPES,
@@ -1513,7 +1627,7 @@ def _resolve_run_direction(
             tag = "rake_along_low_slope" if pitch_from_vertical_deg < low_slope_pitch_deg else "rake_along_high_residual"
             return chosen / float(np.linalg.norm(chosen)), tag
 
-    # 4. Longest-edge perpendicular last resort
+    # 5. Longest-edge perpendicular last resort
     edge = _longest_edge_perp(polygon_xy)
     if edge is None:
         return np.array([1.0, 0.0]), "default_axis"
@@ -2283,7 +2397,7 @@ def _render_page2(
     always a 2-column x 3-row grid (last page may be partial). The caller
     invokes once per chunk and handles showPage() between them.
     """
-    page_w, page_h = LETTER
+    page_w, page_h = ANSI_B_LANDSCAPE
     c.setPageSize((page_w, page_h))
     meta = _meta(roof)
 
@@ -2320,8 +2434,8 @@ def _render_page2(
     margin_x = 36
     top_y = page_h - 90
     bottom_y = 60
-    cols = 2
-    rows_per_page = 3
+    cols = 3
+    rows_per_page = 2
     gap_x = 32
     gap_y = 26
     slot_w = (page_w - 2 * margin_x - gap_x) / cols
@@ -2423,7 +2537,11 @@ def _draw_panel_edge_diagram(
         p2 = outline_pg[(i + 1) % n]
         code = EDGE_CODE.get(edge.get("type", ""), edge.get("type", "??"))
         length_ft = float(edge.get("length_ft", 0.0))
-        text = f"({code})-{feet_to_ft_in(length_ft)}"
+        length_str = feet_to_ft_in(length_ft)
+        # Drop the empty (code)- prefix when this edge has no user label
+        # (which now happens whenever an unlabeled edge is not inherited
+        # from a shared neighbor).
+        text = f"({code})-{length_str}" if code else length_str
         specs.append(_EdgeLabelSpec(p1, p2, centroid_pg, text, base_size=7.0))
 
     roof_edges_pg = [(outline_pg[i], outline_pg[(i + 1) % n]) for i in range(n)]
@@ -2531,48 +2649,12 @@ def _render_page3(
             ("Color", meta["finish_color"]),
         ]),
     ]
-    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Project Summary",
-                              summary_sections)
-    top_y -= h + 12
-
-    # 2. Trim Takeoff card — Standard / Standing Seam grouped sections.
-    standard_rows = [
-        (_trim_label_titlecase(label), feet_to_ft_in(trim_totals.get(code, 0.0)))
-        for label, code in TRIM_TAKEOFF_ORDER
-        if trim_totals.get(code, 0.0) > 0
-    ]
-    ss_rows = [
-        (name.title(), feet_to_ft_in(formula(trim_totals)))
-        for name, formula in trim_formulas.items()
-    ]
-    takeoff_sections: list[tuple[str | None, list[tuple[str, str]]]] = []
-    if standard_rows:
-        takeoff_sections.append(("Standard Trim Items", standard_rows))
-    if ss_rows:
-        takeoff_sections.append(("Standing Seam Trim Items", ss_rows))
-    if not takeoff_sections:
-        takeoff_sections = [(None, [("—", "")])]
-    h = _draw_grouped_kv_card(c, col_x, top_y, col_w, "Trim Takeoff (LF)",
-                              takeoff_sections)
-    top_y -= h + 12
-
-    # 3. Trim Codes legend — two-column reference.
-    code_entries = [
-        (code, _trim_label_titlecase(label))
-        for label, code in EDGE_CODE.items()
-    ]
-    h = _draw_codes_legend_card(c, col_x, top_y, col_w, "Trim Codes",
-                                code_entries)
-    top_y -= h + 12
-
-    # 4. Coil Requirements — kept on the page; same modern card style.
-    coil_rows = _coil_rows_for_page3(roof, total_sheet_lf)
-    if coil_rows:
-        coil_sections: list[tuple[str | None, list[tuple[str, str]]]] = [
-            (None, [(label, value) for label, value in coil_rows]),
-        ]
-        _draw_grouped_kv_card(c, col_x, top_y, col_w, "Coil Requirements",
-                              coil_sections)
+    # Right column: Project Summary only. Trim Takeoff / Trim Codes legend
+    # / Coil Requirements were removed at user request — those numbers live
+    # on dedicated pages (Total Cut List, Combined Edge Detail) and on the
+    # web app coil calculator.
+    _draw_grouped_kv_card(c, col_x, top_y, col_w, "Project Summary",
+                          summary_sections)
 
     # ---- Panel grid: fills everything to the LEFT of the right column ----
     grid_x0 = 40
@@ -3373,7 +3455,7 @@ def _render_page_orthographic_views(
 
     # Header (matches the format of the other landscape pages)
     c.setFont(FONT_BOLD, 14)
-    c.drawString(40, page_h - 36, "ORTHOGRAPHIC VIEWS")
+    c.drawString(40, page_h - 36, "Aerial Views")
     c.setFont(FONT, 9)
     c.drawString(40, page_h - 50, meta["project_name"])
     c.drawRightString(page_w - 40, page_h - 36,
@@ -3795,6 +3877,28 @@ def roof_dict_from_pipeline(
         project_meta.get("user_edge_types") or {}
     )
 
+    # Pre-pass: build a shared-edge label map so unlabeled edges on one
+    # panel can inherit a label from a neighbor panel that DID label the
+    # shared edge. Without this, a ridge labeled only on panel 1 renders
+    # correctly on panel 1 but as a bare length on panel 2's diagram.
+    shared_label_map: dict[tuple, str] = {}
+    for src_pid, src_types in user_edge_types.items():
+        if not src_types:
+            continue
+        src_poly = polygons.get(src_pid)
+        if src_poly is None:
+            continue
+        n_src = src_poly.shape[0]
+        for i in range(min(len(src_types), n_src)):
+            label = src_types[i]
+            if not label:
+                continue
+            key = _shared_edge_key(src_poly[i], src_poly[(i + 1) % n_src])
+            # First non-empty label wins. If two adjacent panels disagree
+            # on a shared edge label, the lower panel_id's wins -- rare in
+            # practice; users typically only label one side of a shared edge.
+            shared_label_map.setdefault(key, label)
+
     # Z-range across the entire roof, used by the eave/ridge classifier
     all_z = np.concatenate([poly[:, 2] for poly in polygons.values()])
     z_min, z_max = float(all_z.min()), float(all_z.max())
@@ -3834,19 +3938,38 @@ def roof_dict_from_pipeline(
         poly = polygons[pid]
         plane = planes[pid]
         others = [polygons[other] for other in panel_ids if other != pid]
-        # Geometric classifier always runs — its output is the per-edge
-        # fallback when the learned classifier is off OR the learned
-        # classifier returns low confidence on a particular edge.
-        types = _classify_panel_edges(poly, others, z_min, z_max)
+        # Geometric classifier kept available but DISABLED for PDF output —
+        # user-supplied labels from the labeler are authoritative. Unlabeled
+        # edges render with no 2-letter code (rather than a guessed HIP/RIDGE
+        # that mis-represents valleys, gables, etc.). Call retained for
+        # parity but its result is discarded.
+        _classify_panel_edges(poly, others, z_min, z_max)  # disabled: result ignored
+        types: list[str] = [""] * poly.shape[0]
 
-        # User-supplied labels from the labeler override the geometric
-        # classifier per-edge. Empty / missing entries fall back to the
-        # geometric inference for that one edge.
+        # User labels are the single source of truth. Length mismatch is
+        # surfaced as a warning rather than silently dropping the whole
+        # panel's labels — apply the overlapping prefix.
         user_types = user_edge_types.get(pid)
-        if user_types and len(user_types) == poly.shape[0]:
-            for i, ut in enumerate(user_types):
-                if ut:
-                    types[i] = ut
+        if user_types:
+            if len(user_types) != poly.shape[0]:
+                log.warning(
+                    "panel %d: user_edge_types length %d != polygon vertex count %d; "
+                    "applying overlapping prefix only",
+                    pid, len(user_types), poly.shape[0],
+                )
+            for i in range(min(len(user_types), poly.shape[0])):
+                if user_types[i]:
+                    types[i] = user_types[i]
+
+        # Shared-edge inheritance: if this panel left an edge blank but a
+        # neighbor labeled the same shared edge, adopt the neighbor's label.
+        for i in range(poly.shape[0]):
+            if types[i]:
+                continue
+            key = _shared_edge_key(poly[i], poly[(i + 1) % poly.shape[0]])
+            inherited = shared_label_map.get(key)
+            if inherited:
+                types[i] = inherited
 
         # Drop degenerate edges (corner-snap can collapse two clicks into
         # one position). Keep boundary vertices and edge labels in lockstep:
@@ -3912,7 +4035,7 @@ def roof_dict_from_pipeline(
         )
 
         panels.append({
-            "panel_id": f"panel_{pid}",
+            "panel_id": f"Plane {pid}",
             "_pid": pid,                                 # internal: integer id for match-pass lookup
             "_polygon": cleaned_poly,                    # internal: kept for re-layout
             "_plane": plane,                             # internal: kept for re-layout

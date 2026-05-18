@@ -386,6 +386,7 @@ def predict_edges(
             out.append(("", confidence))
         else:
             label = classes[idx] if idx < len(classes) else ""
+            label = _override_hip_valley(rows[i], label)
             out.append((label, confidence))
             high_count += 1
 
@@ -415,3 +416,73 @@ def predict_edges(
         },
     )
     return out
+
+
+# ============================================================================
+# Hip vs Valley deterministic override (added 2026-05-17)
+# ============================================================================
+# Both classes sit on diverging plane faces (negative neighbor_normal_dot),
+# but they are geometrically opposite: HIP is the TOP shared edge between
+# two panels that fall away from it; VALLEY is the BOTTOM shared edge
+# between two panels that climb away from it.
+#
+# Encoded as a centrality ratio against the adjacent panel's elevation
+# range: edges near the top are hips, edges near the bottom are valleys.
+# Thresholds are conservative on purpose — anything in the middle band
+# (0.3..0.7) keeps the classifier's call, so a confused but plausibly-
+# correct ML output is preserved.
+#
+# Pre-conditions before this can override anything:
+#   - Classifier already predicted hip OR valley (we never overrule
+#     eave/rake/ridge).
+#   - Edge is actually shared with a neighbor (solo edges cannot be
+#     hip/valley by definition).
+#   - Neighbor normals diverge (dot < 0.3) - sanity guard, both classes
+#     live in that regime.
+#   - Adjacent panel has a meaningful elevation span (>= 0.5m) so the
+#     centrality ratio is numerically stable.
+#
+# Index references match FEATURE_COLUMNS in predict.py - keep in sync.
+
+_OVERRIDE_HIP_CENTRALITY = 0.70
+_OVERRIDE_VALLEY_CENTRALITY = 0.30
+_OVERRIDE_MIN_PANEL_SPAN_M = 0.5
+_OVERRIDE_NEIGHBOR_DOT_MAX = 0.30
+_override_flips = 0
+_override_checked = 0
+
+
+def _override_hip_valley(features_row, prediction):
+    """Return the (possibly overridden) edge label."""
+    global _override_flips, _override_checked
+    if prediction not in ("hip", "valley"):
+        return prediction
+    _override_checked += 1
+
+    edge_z_min = features_row[3]
+    edge_z_max = features_row[4]
+    panel_z_min = features_row[7]
+    panel_z_max = features_row[8]
+    shared = features_row[15]
+    neighbor_dot = features_row[16]
+
+    if not shared:
+        return prediction
+    if neighbor_dot > _OVERRIDE_NEIGHBOR_DOT_MAX:
+        return prediction
+    span = panel_z_max - panel_z_min
+    if span < _OVERRIDE_MIN_PANEL_SPAN_M:
+        return prediction
+
+    edge_z_avg = (edge_z_min + edge_z_max) / 2.0
+    centrality = (edge_z_avg - panel_z_min) / span
+
+    new_label = prediction
+    if centrality >= _OVERRIDE_HIP_CENTRALITY:
+        new_label = "hip"
+    elif centrality <= _OVERRIDE_VALLEY_CENTRALITY:
+        new_label = "valley"
+
+    if new_label != prediction:
+        _override_flips += 1
+    return new_label

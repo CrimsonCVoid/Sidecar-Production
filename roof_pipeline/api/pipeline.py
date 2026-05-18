@@ -574,6 +574,8 @@ async def generate_pdf(
 
         drawn_by = _resolve_drawn_by(supabase, sample_id)
 
+        material_qs = request.query_params.get("material") or None
+        color_qs = request.query_params.get("color") or None
         try:
             output_paths = await asyncio.to_thread(
                 run_pipeline,
@@ -588,6 +590,8 @@ async def generate_pdf(
                 estimate_number=sample_id[:8],
                 rgb_bytes=rgb_bytes,
                 drawn_by=drawn_by,
+                material=material_qs,
+                finish_color=color_qs,
             )
         except Exception as exc:
             # Convert known labeler-data failures into clean 4xxs instead
@@ -616,12 +620,18 @@ async def generate_pdf(
                 ) from exc
             raise
 
-        # Find the cutsheets PDF
-        pdf_path = output_paths.get("cutsheets_pdf")
+        # Pull the shop drawings PDF (ANSI B, 9 pages — what users
+        # actually want from this endpoint). `run_pipeline` returns
+        # three PDFs keyed `pdf` / `ts_pdf` / `shop_pdf`; the old
+        # `cutsheets_pdf` key never existed, so this used to fall
+        # through to `glob("*.pdf")[0]`, which is filesystem-order
+        # dependent and happened to return shop_drawings.pdf only by
+        # luck on the current droplet.
+        pdf_path = output_paths.get("shop_pdf")
         if pdf_path is None or not pdf_path.exists():
-            # Try any PDF in output
-            pdfs = list(out_dir.glob("*.pdf"))
-            pdf_path = pdfs[0] if pdfs else None
+            # Defensive fallback if shop drawings somehow weren't
+            # produced this run — prefer shop > letter > ts.
+            pdf_path = output_paths.get("pdf") or output_paths.get("ts_pdf")
 
         if pdf_path is None or not pdf_path.exists():
             raise HTTPException(status_code=500, detail="Pipeline ran but no PDF was generated")
@@ -905,6 +915,8 @@ async def generate_finalized_pdf(
             profile=profile,
             rgb_bytes=rgb_bytes,
             drawn_by=drawn_by,
+            material=request.query_params.get("material") or None,
+            finish_color=request.query_params.get("color") or None,
         )
 
         pdf_path = output_paths.get("shop_pdf") or output_paths.get("pdf")

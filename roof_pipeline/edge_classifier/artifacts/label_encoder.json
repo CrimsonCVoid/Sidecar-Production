@@ -25,7 +25,7 @@
     "shared_with_neighbor",
     "neighbor_normal_dot"
   ],
-  "cv_mean_accuracy": 0.8292941840767927,
-  "cv_std_accuracy": 0.026598498123904035,
-  "n_train_rows": 1154
+  "cv_mean_accuracy": 0.8150537634408602,
+  "cv_std_accuracy": 0.013853869598629205,
+  "n_train_rows": 1860
 }
