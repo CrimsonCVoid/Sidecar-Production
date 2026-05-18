@@ -3603,6 +3603,26 @@ def generate_shop_drawings(
     log.info("shop_drawings: %d panels, %d sheets, total sheet LF = %.1f ft",
              len(panels), n_sheets, total_lf)
 
+    # Sheet-length normalization (env-gated; default off).
+    _norm_report = normalize_sheet_lengths(roof)
+    if _norm_report["mode"] != "off":
+        log.info(
+            "shop_drawings: sheet-length normalize mode=%s panels_with_groups=%d "
+            "clusters_fired=%d sheets_normalized=%d",
+            _norm_report["mode"],
+            _norm_report["panels_with_groups"],
+            _norm_report["clusters_fired"],
+            _norm_report["sheets_normalized"],
+        )
+        for d in _norm_report["details"]:
+            tag = "ABANDON" if d.get("abandoned") else ("WOULD-MERGE" if _norm_report["mode"] == "log_only" else "MERGED")
+            log.info(
+                "shop_drawings: %s panel=%s qty=%d range=%.2f-%.2f in -> nominal=%.0f in%s",
+                tag, d.get("panel_id"), d["qty"],
+                d["cluster_min_in"], d["cluster_max_in"], d["nominal_in"],
+                f" reason={d['reason']}" if d.get("reason") else "",
+            )
+
     # Dynamic page count: panel layout + 2 wireframe pages (clean + dimensioned)
     # + edge/trim pages + per-panel cut list + consolidated cut summary
     # (may span multiple pages) + combined edge detail + orthographic
@@ -4117,3 +4137,150 @@ if __name__ == "__main__":
                         datefmt="%H:%M:%S")
     out = generate_shop_drawings(SAMPLE_ROOF, "output/shop_drawings_sample.pdf")
     print(f"wrote {out}")
+
+
+# ============================================================================
+# Sheet-length normalization (added 2026-05-18, feat/panel-length-normalize)
+# ============================================================================
+# Cluster sheets of similar length within a single panel and collapse the
+# cluster to one rounded-up whole-inch length. Removes the sub-pixel-jitter
+# spread that makes a single physical "12-of-the-same-length" run appear
+# as 12 slightly-different rows on the cut list. Per panel only — never
+# across panels (different planes have independent eaves and shouldn't
+# share a normalized length).
+#
+# Trigger thresholds are conservative on purpose:
+#   - min_group = 4 sheets (one stray pair doesn't collapse)
+#   - tolerance = 1.5 inches (catches sub-pixel + RANSAC jitter without
+#     swallowing legitimate ~2" geometric differences)
+#   - round UP only (an over-long sheet is a 10-second field trim; a
+#     short one can't reach the eave and leaks)
+#
+# Each sheet that gets normalized:
+#   - sheet["length_ft_actual"] keeps the original measurement.
+#   - sheet["length_ft"] is replaced with the rounded group value so the
+#     BOM, cut summary, and shop-drawing length labels all show the same
+#     deliverable number.
+#   - sheet["normalized_inches"] (new) records the delta in inches so
+#     audit logs / per-panel rendering can flag any sheet that drifted
+#     by more than ~0.5".
+#
+# Controlled by env var PANEL_LENGTH_NORMALIZE_MODE:
+#   "off"      (default) — pure no-op, branch behaves like main.
+#   "log_only" — compute groups + log what WOULD change, leave lengths
+#                untouched. Use this first on a few real projects to
+#                audit how often it fires before flipping it to "on".
+#   "on"       — apply, mutate sheet lengths.
+
+_NORM_MODE_ENV = "PANEL_LENGTH_NORMALIZE_MODE"
+_NORM_MIN_GROUP = 4
+_NORM_TOLERANCE_IN = 1.5
+_NORM_MAX_SHORTEN_IN = 1.0  # bail on a cluster if it would shorten any sheet by more than this
+
+
+def _normalize_mode() -> str:
+    import os as _os
+    return (_os.environ.get(_NORM_MODE_ENV) or "off").strip().lower()
+
+
+def _cluster_lengths_in(values_in, tolerance_in):
+    """Single-linkage 1-D clustering on sorted-ascending length values (inches).
+    Returns list of clusters; each cluster is a list of (orig_index, value_in)
+    tuples sorted by value_in. tolerance_in is the max delta between
+    neighbouring values within a cluster — anything wider starts a new one.
+    """
+    if not values_in:
+        return []
+    indexed = sorted(enumerate(values_in), key=lambda iv: iv[1])
+    clusters = [[indexed[0]]]
+    for orig_i, v in indexed[1:]:
+        if v - clusters[-1][-1][1] <= tolerance_in:
+            clusters[-1].append((orig_i, v))
+        else:
+            clusters.append([(orig_i, v)])
+    return clusters
+
+
+def normalize_sheet_lengths(roof, *, min_group=_NORM_MIN_GROUP,
+                            tolerance_in=_NORM_TOLERANCE_IN,
+                            max_shorten_in=_NORM_MAX_SHORTEN_IN,
+                            mode=None):
+    """Per-panel cluster + collapse pass over roof["roof_panels"][*]["sheets"].
+
+    Returns a dict with audit numbers so callers can log per-run impact:
+        {
+          "mode": str,
+          "panels_with_groups": int,
+          "clusters_fired": int,
+          "sheets_normalized": int,
+          "details": list[{panel_id, cluster_min_in, cluster_max_in,
+                           nominal_in, qty, abandoned: bool, reason?: str}],
+        }
+    """
+    if mode is None:
+        mode = _normalize_mode()
+    out = {
+        "mode": mode,
+        "panels_with_groups": 0,
+        "clusters_fired": 0,
+        "sheets_normalized": 0,
+        "details": [],
+    }
+    if mode not in ("log_only", "on"):
+        return out
+
+    import math as _math
+    panels = roof.get("roof_panels", []) or []
+    for panel in panels:
+        sheets = panel.get("sheets", []) or []
+        if len(sheets) < min_group:
+            continue
+        lengths_in = [float(s.get("length_ft", 0.0)) * 12.0 for s in sheets]
+        clusters = _cluster_lengths_in(lengths_in, tolerance_in)
+        any_fired = False
+        for cluster in clusters:
+            if len(cluster) < min_group:
+                continue
+            cluster_vals = [v for _, v in cluster]
+            cmin, cmax = cluster_vals[0], cluster_vals[-1]
+            spread = cmax - cmin
+            if spread > tolerance_in:
+                continue  # belt-and-suspenders; _cluster guarantees this already
+            nominal_in = float(_math.ceil(cmax))
+            # Reject the cluster if rounding shortens any sheet beyond the safety bound
+            # (this can only happen if we ever switch to round-nearest; we currently
+            # round UP so this is defensive). Still useful as a guard against future
+            # config changes.
+            min_shorten = min(nominal_in - v for v in cluster_vals)
+            if min_shorten < -max_shorten_in:
+                out["details"].append({
+                    "panel_id": panel.get("id"),
+                    "cluster_min_in": round(cmin, 2),
+                    "cluster_max_in": round(cmax, 2),
+                    "nominal_in": nominal_in,
+                    "qty": len(cluster),
+                    "abandoned": True,
+                    "reason": f"would shorten by {abs(min_shorten):.2f} in",
+                })
+                continue
+            out["clusters_fired"] += 1
+            out["sheets_normalized"] += len(cluster)
+            out["details"].append({
+                "panel_id": panel.get("id"),
+                "cluster_min_in": round(cmin, 2),
+                "cluster_max_in": round(cmax, 2),
+                "nominal_in": nominal_in,
+                "qty": len(cluster),
+                "abandoned": False,
+            })
+            any_fired = True
+            if mode == "on":
+                nominal_ft = nominal_in / 12.0
+                for orig_i, _ in cluster:
+                    sheet = sheets[orig_i]
+                    sheet.setdefault("length_ft_actual", round(float(sheet.get("length_ft", 0.0)), 4))
+                    sheet["normalized_inches"] = round(nominal_in - float(sheet.get("length_ft", 0.0)) * 12.0, 3)
+                    sheet["length_ft"] = round(nominal_ft, 4)
+        if any_fired:
+            out["panels_with_groups"] += 1
+    return out
